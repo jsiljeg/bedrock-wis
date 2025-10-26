@@ -20,7 +20,6 @@ env:
   # Build-time plugins (from GitHub) – add/remove as needed:
   BUILD_PLUGINS: |
     https://github.com/Yoast/wordpress-seo
-    https://github.com/OllieWP/ollie
     https://github.com/woocommerce/woocommerce
 
 jobs:
@@ -56,23 +55,60 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Sage Theme (npm)
+    name: Build Sage Theme (npm, cached)
     runs-on: ubuntu-latest
+    env:
+      THEME_DIR: web/app/themes/sage
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node and Cache
-        uses: ./.github/actions/setup-node
+      # 1) Fetch Sage if it's not in the repo
+      - name: Ensure Sage exists
+        run: |
+          set -euxo pipefail
+          if [ ! -d "${THEME_DIR}" ] || [ ! -f "${THEME_DIR}/package.json" ]; then
+            mkdir -p "$(dirname "${THEME_DIR}")"
+            git clone --depth=1 https://github.com/roots/sage "${THEME_DIR}"
+            # if Sage requires composer (it does) for its PHP deps:
+            if [ -f "${THEME_DIR}/composer.json" ]; then
+              sudo apt-get update -y
+              sudo apt-get install -y php-cli unzip
+              EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
+              php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+              ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+              [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
+              php composer-setup.php --quiet
+              rm composer-setup.php
+              php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
+            fi
+          fi
+
+      # 2) Setup Node AFTER Sage files exist, so lockfile is present for cache key
+      - name: Use Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          working-directory: ${{ env.THEME_DIR }}
+          cache: npm
+          cache-dependency-path: ${{ env.THEME_DIR }}/package-lock.json
 
+      # 3) Cache node_modules keyed by lockfile
+      - name: Cache node_modules
+        id: theme-npm-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEME_DIR }}/node_modules
+          key: node-mod-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
+          restore-keys: |
+            node-mod-${{ runner.os }}-
+
+      # 4) Install & build
       - name: Install & build theme
         working-directory: ${{ env.THEME_DIR }}
         run: |
           npm ci
           npm run build
 
+      # 5) Upload assets (public/dist) for packaging
       - name: Upload theme artifact
         uses: actions/upload-artifact@v4
         with:
@@ -81,6 +117,7 @@ jobs:
             ${{ env.THEME_DIR }}/public
             ${{ env.THEME_DIR }}/dist
           retention-days: 3
+
 
   plugins_build:
     name: Assemble Plugins (GitHub sources)
@@ -130,10 +167,21 @@ jobs:
         run: |
           tar -xzf ./_artifacts/vendor/vendor.tar.gz
 
-      - name: Inject built theme + plugins
+      - name: Inject built theme + plugins (if present)
         run: |
-          rsync -a ./_artifacts/theme-build/ web/app/themes/sage/
-          rsync -a ./_artifacts/plugins/ web/app/plugins/
+          set -euo pipefail
+          if [ -d ./_artifacts/theme-build ]; then
+            mkdir -p web/app/themes/sage
+            rsync -a ./_artifacts/theme-build/ web/app/themes/sage/
+          else
+            echo "No theme-build artifact; skipping theme injection."
+          fi
+          if [ -d ./_artifacts/plugins ]; then
+            rsync -a ./_artifacts/plugins/ web/app/plugins/
+          else
+            echo "No plugins artifact; skipping plugin injection."
+          fi
+
 
       - name: Prune dev files
         run: |
