@@ -58,42 +58,44 @@ jobs:
     name: Build Sage Theme (npm, cached)
     runs-on: ubuntu-latest
     env:
-      THEME_DIR: web/app/themes/sage
+      THEME_DIR: ${{ env.THEME_DIR }}      # uses your top-level env (web/app/themes/sage)
+      NODE_VERSION: ${{ env.NODE_VERSION }} # uses your top-level env (20)
     steps:
       - uses: actions/checkout@v4
 
-      # 1) Fetch Sage if it's not in the repo
-      - name: Ensure Sage exists
+      - name: Ensure Sage exists (clone + composer deps)
+        shell: bash
         run: |
           set -euxo pipefail
           if [ ! -d "${THEME_DIR}" ] || [ ! -f "${THEME_DIR}/package.json" ]; then
             mkdir -p "$(dirname "${THEME_DIR}")"
             git clone --depth=1 https://github.com/roots/sage "${THEME_DIR}"
-            # if Sage requires composer (it does) for its PHP deps:
-            if [ -f "${THEME_DIR}/composer.json" ]; then
-              sudo apt-get update -y
-              sudo apt-get install -y php-cli unzip
-              EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
-              php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-              ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-              [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
-              php composer-setup.php --quiet
-              rm composer-setup.php
-              php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
-            fi
+            # Sage has PHP deps; install via Composer
+            sudo apt-get update -y
+            sudo apt-get install -y php-cli unzip
+            EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
+            php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+            ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+            [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
+            php composer-setup.php --quiet
+            rm composer-setup.php
+            php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
           fi
 
-      # 2) Setup Node AFTER Sage files exist, so lockfile is present for cache key
       - name: Use Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.THEME_DIR }}/package-lock.json
 
-      # 3) Cache node_modules keyed by lockfile
+      - name: Ensure package-lock.json (for caching)
+        shell: bash
+        working-directory: ${{ env.THEME_DIR }}
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm i --package-lock-only
+          fi
+
       - name: Cache node_modules
-        id: theme-npm-cache
         uses: actions/cache@v4
         with:
           path: ${{ env.THEME_DIR }}/node_modules
@@ -101,14 +103,13 @@ jobs:
           restore-keys: |
             node-mod-${{ runner.os }}-
 
-      # 4) Install & build
       - name: Install & build theme
+        shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
           npm ci
           npm run build
 
-      # 5) Upload assets (public/dist) for packaging
       - name: Upload theme artifact
         uses: actions/upload-artifact@v4
         with:
