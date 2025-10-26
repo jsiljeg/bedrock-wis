@@ -1,8 +1,8 @@
 name: Post release topic on Discourse
 
-on:
-  release:
-    types: [published]
+#on:
+#  release:
+#    types: [published]
 
 jobs:
   post:

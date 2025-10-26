@@ -15,7 +15,7 @@ concurrency:
 env:
   PHP_VERSION: "8.2"
   NODE_VERSION: "20"
-  THEME_DIR: "web/app/themes/sage" # adjust if you named it differently
+  THEME_DIR: "web/app/themes/sage"
   PLUGINS_DIR: "web/app/plugins"
   # Build-time plugins (from GitHub) – add/remove as needed:
   BUILD_PLUGINS: |
@@ -57,9 +57,6 @@ jobs:
   theme_build:
     name: Build Sage Theme (npm, cached)
     runs-on: ubuntu-latest
-    env:
-      THEME_DIR: ${{ env.THEME_DIR }}      # uses your top-level env (web/app/themes/sage)
-      NODE_VERSION: ${{ env.NODE_VERSION }} # uses your top-level env (20)
     steps:
       - uses: actions/checkout@v4
 
@@ -118,6 +115,7 @@ jobs:
             ${{ env.THEME_DIR }}/public
             ${{ env.THEME_DIR }}/dist
           retention-days: 3
+
 
 
   plugins_build:
