@@ -34,4 +34,3 @@ module "bedrock" {
   db_pass = var.db_pass
 }
 
-
