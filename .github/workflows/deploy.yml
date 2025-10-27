@@ -193,6 +193,16 @@ jobs:
           TS=$(date -u +"%Y%m%d-%H%M%S")
           echo "release_name=bedrock-${TS}" >> "$GITHUB_OUTPUT"
 
+      # Bring back PHP/Composer so we can materialize web/wp
+      - name: Setup Composer / PHP
+        uses: ./.github/actions/setup-composer
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      # Recreate WordPress core (web/wp) from composer.json/lock
+      - name: Composer install (materialize web/wp)
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev
+
       - name: Bundle release tarball
         id: bundle
         run: |
