@@ -199,27 +199,19 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
 
-      - name: Materialize WordPress core into web/wp
+      - name: Composer install (no dev) in packaging workspace
+        run: composer install --no-interaction --no-progress --prefer-dist --no-dev
+
+      - name: Ensure WordPress core exists in web/wp (WP-CLI fallback)
+        shell: bash
         run: |
           set -euxo pipefail
-          # Add Roots repo (needed for roots/wordpress)
-          composer config repositories.roots composer https://repo.roots.io
-
-          # Ensure Bedrock's expected install dir
-          composer config extra.wordpress-install-dir web/wp
-
-          # Only add the dependency to composer.json if web/wp isn't present yet
           if [ ! -f web/wp/wp-settings.php ]; then
-            # NOTE: --no-dev is NOT a valid flag for `composer require`
-            composer require roots/wordpress:^6.8 --no-progress --no-interaction --no-update
+            echo "web/wp missing; fetching WordPress core via WP-CLI fallback..."
+            curl -fsSL -o wp.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+            php wp.phar core download --path=web/wp --version=6.8.3 --skip-content
           fi
-
-          # Now actually install (materializes web/wp) without dev deps
-          composer install --no-interaction --no-progress --prefer-dist --no-dev
-
-          # Sanity check
           test -f web/wp/wp-settings.php
-
 
       - name: Verify release contents
         run: |

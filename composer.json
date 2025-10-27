@@ -16,10 +16,6 @@
   "repositories": [
     {
       "type": "composer",
-      "url": "https://repo.roots.io"
-    },
-    {
-      "type": "composer",
       "url": "https://wpackagist.org",
       "only": ["wpackagist-plugin/*", "wpackagist-theme/*"]
     }
@@ -31,7 +27,7 @@
     "oscarotero/env": "^2.1",
     "roots/bedrock-autoloader": "^1.0",
     "roots/bedrock-disallow-indexing": "^2.0",
-    "roots/wordpress": "6.8.3",
+    "roots/wordpress-no-content": "6.8.3",
     "roots/wp-config": "1.0.0",
     "wpackagist-theme/twentytwentyfive": "^1.0",
     "wpackagist-plugin/wordpress-seo": "23",
