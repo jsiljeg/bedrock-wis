@@ -47,12 +47,13 @@ runs:
 
         HOST='${{ inputs.host }}'
         USER='${{ inputs.user }}'
-        DEPLOY_PATH='${{ inputs['deploy-path'] }}'
-        WP_URL_INPUT='${{ inputs['wp-url'] }}'
-        ADMIN_USER='${{ inputs['admin-user'] }}'
-        ADMIN_EMAIL='${{ inputs['admin-email'] }}'
-        ADMIN_PASS_B64="$(printf "%s" "${{ inputs['admin-pass'] }}" | base64 -w0)"
+        DEPLOY_PATH='${{ inputs.deploy-path }}'
+        WP_URL_INPUT='${{ inputs.wp-url }}'
+        ADMIN_USER='${{ inputs.admin-user }}'
+        ADMIN_EMAIL='${{ inputs.admin-email }}'
+        ADMIN_PASS_B64="$(printf "%s" "${{ inputs.admin-pass }}" | base64 -w0)"
 
+        # SSH into VM and perform idempotent install
         ssh -i ~/.ssh/id_rsa "${USER}@${HOST}" \
           DEPLOY_PATH="${DEPLOY_PATH}" \
           WP_URL_INPUT="${WP_URL_INPUT}" \
@@ -70,10 +71,11 @@ runs:
         elif command -v wp >/dev/null 2>&1; then
           WP="wp"
         else
+          # Install curl and PHP CLI if needed, then wp-cli.phar
           if ! command -v curl >/dev/null 2>&1; then
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update -y
-              sudo apt-get install -y curl
+              sudo apt-get install -y curl php-cli
             fi
           fi
           curl -fsSL -o wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
@@ -81,6 +83,9 @@ runs:
           sudo mv wp-cli.phar /usr/local/bin/wp
           WP="wp"
         fi
+
+        # 👇 point WP-CLI at core under web/wp
+        WP="$WP --path=web/wp"
 
         # Prefer WP_HOME from shared .env if no wp-url provided
         if [ -z "${WP_URL_INPUT}" ] && [ -f "${DEPLOY_PATH}/shared/.env" ]; then
