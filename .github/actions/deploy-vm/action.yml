@@ -38,6 +38,14 @@ runs:
         mkdir -p "${REL_DIR}"
         tar -xzf "${TARBALL}" -C "${REL_DIR}"
 
+        # Sanity: ensure WordPress core is present
+        if [ ! -f "${REL_DIR}/web/wp/wp-settings.php" ]; then
+          echo "ERROR: WordPress core (web/wp) is missing in the release."
+          echo "Contents under ${REL_DIR}/web (depth 2) for debugging:"
+          find "${REL_DIR}/web" -maxdepth 2 -type f | sed "s|${REL_DIR}/||" | head -n 200 || true
+          exit 1
+        fi
+
         # Link shared bits (.env and uploads)
         if [ -f "${DEPLOY_PATH}/shared/.env" ]; then
           ln -sfn "${DEPLOY_PATH}/shared/.env" "${REL_DIR}/.env"

@@ -98,6 +98,9 @@ runs:
           exit 1
         fi
 
+        ${WP} core version || { echo "wp-cli cannot read core; current PWD: $(pwd)"; exit 1; }
+
+
         # Idempotent install
         if ${WP} core is-installed; then
           echo "WordPress already installed. Skipping."
