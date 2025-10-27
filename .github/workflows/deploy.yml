@@ -196,9 +196,28 @@ jobs:
       - name: Bundle release tarball
         id: bundle
         run: |
+          set -euxo pipefail
           name="${{ steps.meta.outputs.release_name }}"
-          tar --exclude='./_artifacts' --exclude="./${name}.tar.gz" -czf "${name}.tar.gz" .
+
+          # Create a clean snapshot outside the working tree
+          STAGE="$(mktemp -d)"
+
+          # Copy everything we want to ship, exclude CI/dev stuff
+          rsync -a --delete \
+            --exclude '_artifacts' \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '*.tar.gz' \
+            ./ "$STAGE/"
+
+          # Create tarball OUTSIDE the tree we're archiving
+          tar -C "$STAGE" -czf "/tmp/${name}.tar.gz" .
+
+          # Move it back to the workspace so later steps can find it
+          mv "/tmp/${name}.tar.gz" .
+
           echo "release_tarball=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
 
       - name: Upload release tarball (artifact)
         uses: actions/upload-artifact@v4

@@ -1,6 +1,6 @@
 name: Post release topic on Discourse
 
-#on:
+on:
 #  release:
 #    types: [published]
 
