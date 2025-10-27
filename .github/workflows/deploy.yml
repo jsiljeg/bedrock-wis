@@ -197,7 +197,7 @@ jobs:
         id: bundle
         run: |
           name="${{ steps.meta.outputs.release_name }}"
-          tar --exclude='./_artifacts' -czf "${name}.tar.gz" .
+          tar --exclude='./_artifacts' --exclude="./${name}.tar.gz" -czf "${name}.tar.gz" .
           echo "release_tarball=${name}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload release tarball (artifact)
