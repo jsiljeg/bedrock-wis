@@ -52,49 +52,62 @@ runs:
         # base64-encode the password to avoid shell quoting issues
         ADMIN_PASS_B64="$(printf "%s" "${{ inputs.admin-pass }}" | base64 -w0)"
 
-        ssh -i ~/.ssh/id_rsa "${USER}@${HOST}" bash -se <<EOF
+        ssh -i ~/.ssh/id_rsa "${USER}@${HOST}" bash -se <<'EOF'
         set -euxo pipefail
 
         DEPLOY_PATH="${DEPLOY_PATH}"
         WP_URL_INPUT="${WP_URL_INPUT}"
         ADMIN_USER="${ADMIN_USER}"
         ADMIN_EMAIL="${ADMIN_EMAIL}"
-        ADMIN_PASS="\$(printf "%s" "${ADMIN_PASS_B64}" | base64 -d)"
+        ADMIN_PASS="$(printf "%s" "${ADMIN_PASS_B64}" | base64 -d)"
 
-        cd "\${DEPLOY_PATH}/current"
+        cd "${DEPLOY_PATH}/current"
 
-        # If vendor/bin/wp doesn't exist (unlikely because we ship vendor), fall back to composer install.
-        if [ ! -x vendor/bin/wp ]; then
-          if command -v composer >/dev/null 2>&1; then
-            composer install --no-interaction --prefer-dist --optimize-autoloader
-          else
-            echo "vendor/bin/wp not present and composer not installed on VM. Aborting." >&2
-            exit 1
+        # Resolve WP-CLI:
+        # 1) Use vendor/bin/wp if present
+        # 2) else install wp-cli.phar to /usr/local/bin/wp and use that
+        if [ -x vendor/bin/wp ]; then
+          WP="php vendor/bin/wp"
+        elif command -v wp >/dev/null 2>&1; then
+          WP="wp"
+        else
+          # install minimal deps for curl if needed
+          if ! command -v curl >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y curl
+            fi
           fi
+          curl -fsSL -o wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+          php -d detect_unicode=0 wp-cli.phar --allow-root --info >/dev/null 2>&1 || true
+          chmod +x wp-cli.phar
+          sudo mv wp-cli.phar /usr/local/bin/wp
+          WP="wp"
         fi
 
         # If no URL provided, try to read from shared .env (WP_HOME=...)
-        if [ -z "\$WP_URL_INPUT" ] && [ -f "\${DEPLOY_PATH}/shared/.env" ]; then
-          WP_URL_INPUT="\$(grep -E '^WP_HOME=' "\${DEPLOY_PATH}/shared/.env" | cut -d= -f2- | tr -d '\r')"
+        if [ -z "\$WP_URL_INPUT" ] && [ -f "${DEPLOY_PATH}/shared/.env" ]; then
+          WP_URL_INPUT="\$(grep -E '^WP_HOME=' "${DEPLOY_PATH}/shared/.env" | cut -d= -f2- | tr -d '\r')"
         fi
 
-        # Sanity: must have a URL
+        # Must have a URL
         if [ -z "\$WP_URL_INPUT" ]; then
           echo "No wp-url provided and WP_HOME not found in shared .env" >&2
           exit 1
         fi
 
         # Install only if not already installed (idempotent)
-        if php vendor/bin/wp core is-installed; then
+        if php -d detect_unicode=0 \$WP core is-installed; then
           echo "WordPress already installed. Skipping."
           exit 0
         fi
 
-        php vendor/bin/wp core install \
+        php -d detect_unicode=0 \$WP core install \
           --url="\$WP_URL_INPUT" \
           --title="Bedrock Dev" \
-          --admin_user="\$ADMIN_USER" \
-          --admin_password="\$ADMIN_PASS" \
-          --admin_email="\$ADMIN_EMAIL" \
+          --admin_user="${ADMIN_USER}" \
+          --admin_password="${ADMIN_PASS}" \
+          --admin_email="${ADMIN_EMAIL}" \
           --skip-email
         EOF
+
