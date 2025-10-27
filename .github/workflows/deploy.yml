@@ -213,6 +213,18 @@ jobs:
           fi
           test -f web/wp/wp-settings.php
 
+      - name: Ensure WordPress core exists in web/wp (fallback download)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ ! -f web/wp/wp-includes/version.php ]; then
+            echo "web/wp core missing; downloading via WP-CLI fallback..."
+            curl -fsSL -o wp.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+            php wp.phar core download --path=web/wp --version=6.8.3 --skip-content
+          fi
+          test -f web/wp/wp-includes/version.php
+
+
       - name: Verify release contents
         run: |
           set -e

@@ -38,6 +38,14 @@ runs:
         mkdir -p "${REL_DIR}"
         tar -xzf "${TARBALL}" -C "${REL_DIR}"
 
+        # Verify WordPress core exists
+        if [ ! -f "${REL_DIR}/web/wp/wp-includes/version.php" ]; then
+          echo "ERROR: WordPress core missing under ${REL_DIR}/web/wp"
+          echo "Debug: show top-level of web and web/wp:"
+          find "${REL_DIR}/web" -maxdepth 2 -type f | sed "s|${REL_DIR}/||" | head -n 200 || true
+          exit 1
+        fi
+
         # Sanity: ensure WordPress core is present
         if [ ! -f "${REL_DIR}/web/wp/wp-settings.php" ]; then
           echo "ERROR: WordPress core (web/wp) is missing in the release."

@@ -65,6 +65,19 @@ runs:
 
         cd "$DEPLOY_PATH/current"
 
+        echo "PWD: $(pwd)"
+        echo "Listing web/wp (first 40 entries):"
+        ls -lah "$DEPLOY_PATH/current/web/wp" | head -n 40 || true
+
+        if [ -f "$DEPLOY_PATH/current/web/wp/wp-includes/version.php" ]; then
+          echo "Found core: $DEPLOY_PATH/current/web/wp/wp-includes/version.php"
+        else
+          echo "Core NOT found under $DEPLOY_PATH/current/web/wp"
+        fi
+
+        WP="wp --path=$DEPLOY_PATH/current/web/wp"
+        $WP core version || { echo "WP-CLI cannot read core at that path"; exit 1; }
+
         # Resolve WP-CLI to a runnable command in $WP
         if [ -x vendor/bin/wp ]; then
           WP="php vendor/bin/wp"
