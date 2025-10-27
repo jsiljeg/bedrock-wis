@@ -199,9 +199,34 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
 
+      - name: Materialize WordPress core into web/wp
+        run: |
+          set -euxo pipefail
+          # Add Roots repo (needed for roots/wordpress)
+          composer config repositories.roots composer https://repo.roots.io
+
+          # Ensure install dir is Bedrock's expected location
+          composer config extra.wordpress-install-dir web/wp
+
+          # If web/wp isn't present yet, pull WordPress core now
+          if [ ! -f web/wp/wp-settings.php ]; then
+            composer require roots/wordpress:^6.8 --no-interaction --no-dev
+          fi
+
+          # Install (or refresh) everything (uses vendor from your earlier artifact)
+          composer install --no-interaction --no-progress --prefer-dist --no-dev
+
+          # Sanity check: fail the build if web/wp is still missing
+          test -f web/wp/wp-settings.php
+
       # Recreate WordPress core (web/wp) from composer.json/lock
       - name: Composer install (materialize web/wp)
         run: composer install --no-interaction --no-progress --prefer-dist --no-dev
+
+      - name: Verify release contents
+        run: |
+          set -e
+          [ -f web/wp/wp-settings.php ] || { echo "ERROR: web/wp missing from release"; exit 1; }
 
       - name: Bundle release tarball
         id: bundle
