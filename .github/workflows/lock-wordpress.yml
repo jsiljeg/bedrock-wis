@@ -1,0 +1,32 @@
+name: Lock WordPress (one-off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Composer update roots/wordpress (no dev)
+        run: |
+          composer update roots/wordpress --no-dev
+
+      - name: Commit updated lockfile
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Lock roots/wordpress and update composer.lock"
+          commit_user_name: github-actions
+          commit_user_email: actions@github.com
+          file_pattern: composer.lock composer.json
