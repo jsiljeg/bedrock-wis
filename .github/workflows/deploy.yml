@@ -205,23 +205,21 @@ jobs:
           # Add Roots repo (needed for roots/wordpress)
           composer config repositories.roots composer https://repo.roots.io
 
-          # Ensure install dir is Bedrock's expected location
+          # Ensure Bedrock's expected install dir
           composer config extra.wordpress-install-dir web/wp
 
-          # If web/wp isn't present yet, pull WordPress core now
+          # Only add the dependency to composer.json if web/wp isn't present yet
           if [ ! -f web/wp/wp-settings.php ]; then
-            composer require roots/wordpress:^6.8 --no-interaction --no-dev
+            # NOTE: --no-dev is NOT a valid flag for `composer require`
+            composer require roots/wordpress:^6.8 --no-progress --no-interaction --no-update
           fi
 
-          # Install (or refresh) everything (uses vendor from your earlier artifact)
+          # Now actually install (materializes web/wp) without dev deps
           composer install --no-interaction --no-progress --prefer-dist --no-dev
 
-          # Sanity check: fail the build if web/wp is still missing
+          # Sanity check
           test -f web/wp/wp-settings.php
 
-      # Recreate WordPress core (web/wp) from composer.json/lock
-      - name: Composer install (materialize web/wp)
-        run: composer install --no-interaction --no-progress --prefer-dist --no-dev
 
       - name: Verify release contents
         run: |
