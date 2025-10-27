@@ -72,6 +72,16 @@ runs:
         rm -rf "${REL_DIR}/web/app/uploads"
         ln -sfn "${DEPLOY_PATH}/shared/uploads" "${REL_DIR}/web/app/uploads"
 
+
+        # Ensure current is a symlink (not a directory)
+        if [ -d "${DEPLOY_PATH}/current" ] && [ ! -L "${DEPLOY_PATH}/current" ]; then
+          echo "Detected directory at ${DEPLOY_PATH}/current — removing to replace with symlink."
+          rm -rf "${DEPLOY_PATH}/current"
+        fi
+
+        ln -sfnT "${REL_DIR}" "${DEPLOY_PATH}/current"
+
+
         # Swap current symlink atomically
         ln -sfnT "${REL_DIR}" "${DEPLOY_PATH}/current"
 
