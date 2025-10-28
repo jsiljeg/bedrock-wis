@@ -1,0 +1,110 @@
+name: Monitoring Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_test_alert:
+        description: "Send a synthetic alert to Slack via Alertmanager?"
+        type: boolean
+        default: true
+  push:
+    branches: [ master ]
+    paths:
+      - 'monitoring/**'
+      - '.github/workflows/monitoring-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  monitoring_smoke:
+    name: Deploy monitoring + optional Slack test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.GCE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rsync monitoring directory
+        run: |
+          rsync -rlgoDzv --delete \
+            -e "ssh -i ~/.ssh/id_rsa" \
+            monitoring/ \
+            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}:${{ secrets.GCE_DEPLOY_PATH }}/monitoring/"
+
+      - name: Render config & (re)start monitoring
+        run: |
+          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
+            "GF_ADMIN_USER='${{ secrets.GF_ADMIN_USER }}' \
+             GF_ADMIN_PASSWORD='${{ secrets.GF_ADMIN_PASSWORD }}' \
+             HEALTHCHECK_URL='${{ secrets.HEALTHCHECK_URL }}' \
+             ALERT_SLACK_WEBHOOK='${{ secrets.ALERT_SLACK_WEBHOOK }}' \
+             ALERT_SLACK_CHANNEL='${{ secrets.ALERT_SLACK_CHANNEL }}' \
+             ALERT_ENV='${{ secrets.ALERT_ENV }}' \
+             bash -se" <<'EOS'
+          set -euxo pipefail
+          cd "${GCE_DEPLOY_PATH:-${HOME}}/monitoring"
+
+          # 1) Render Grafana env
+          cp .env.template .env
+          sed -i \
+            -e "s#__GF_ADMIN_USER__#${GF_ADMIN_USER}#g" \
+            -e "s#__GF_ADMIN_PASSWORD__#${GF_ADMIN_PASSWORD}#g" \
+            .env
+
+          # 2) Inject Bedrock health URL in Prometheus
+          sed -i \
+            -e "s#__HEALTHCHECK_URL__#${HEALTHCHECK_URL}#g" \
+            prometheus/prometheus.yml
+
+          # 3) Inject Slack + env in Alertmanager
+          sed -i \
+            -e "s#__SLACK_WEBHOOK__#${ALERT_SLACK_WEBHOOK}#g" \
+            -e "s#__SLACK_CHANNEL__#${ALERT_SLACK_CHANNEL}#g" \
+            -e "s#__ALERT_ENV__#${ALERT_ENV}#g" \
+            alertmanager/alertmanager.yml
+
+          # 4) Start/Restart stack (sudo fallback if required)
+          (docker compose pull || sudo docker compose pull)
+          (docker compose up -d || sudo docker compose up -d)
+          EOS
+        env:
+          # pass deploy path for use inside the remote shell as a safety net
+          GCE_DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH }}
+
+      - name: Send synthetic alert to Alertmanager (Slack smoke)
+        if: ${{ inputs.send_test_alert }}
+        run: |
+          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
+          set -euo pipefail
+          now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          end=$(date -u -d "+5 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+          cat >/tmp/smoke-alert.json <<JSON
+          [
+            {
+              "labels": {
+                "alertname": "SlackIntegrationTest",
+                "severity": "info",
+                "env": "${{ secrets.ALERT_ENV }}"
+              },
+              "annotations": {
+                "summary": "Synthetic Slack test alert",
+                "description": "Triggered by Monitoring Smoke Test workflow"
+              },
+              "startsAt": "$now",
+              "endsAt": "$end",
+              "generatorURL": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }
+          ]
+          JSON
+          curl -sS -X POST \
+            -H 'Content-Type: application/json' \
+            --data @/tmp/smoke-alert.json \
+            http://127.0.0.1:9093/api/v2/alerts
+          echo "Posted synthetic alert; check channel: ${{ secrets.ALERT_SLACK_CHANNEL }}"
+          EOS
