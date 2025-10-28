@@ -1,17 +1,37 @@
 groups:
+  # Always-on test alert so you can prove Alertmanager → Slack wiring
+  - name: watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: warning
+        annotations:
+          summary: "Watchdog is always firing (used to verify alert pipeline)"
+          description: "Silence this alert if it’s noisy; it proves AM/Slack is alive."
+
   - name: probe-alerts
     rules:
       - alert: BedrockHttpDown
         expr: probe_success{job="blackbox_http"} == 0
         for: 2m
         labels:
-          severity: warning
+          severity: critical
         annotations:
           summary: "HTTP probe failed for {{ $labels.instance }}"
-          description: "Blackbox probe to {{ $labels.instance }} is failing."
+          description: "Blackbox probe to {{ $labels.instance }} is failing for 2m."
 
   - name: node-health
     rules:
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node exporter down on {{ $labels.instance }}"
+          description: "No scrape data from node-exporter for 2 minutes."
+
       - alert: HighNodeMemoryUsage
         expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.15
         for: 5m
@@ -19,4 +39,22 @@ groups:
           severity: warning
         annotations:
           summary: "High memory usage on {{ $labels.instance }}"
-          description: "Available memory < 15% for 5m."
+          description: "Available RAM < 15% for 5m."
+
+      - alert: HighNodeCPU
+        expr: (1 - avg by (instance)(irate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}"
+          description: "Average CPU > 85% for 10m."
+
+      - alert: HighDiskUsage
+        expr: (node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} - node_filesystem_free_bytes{fstype!~"tmpfs|overlay"}) / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Filesystem > 90% used for 10m."

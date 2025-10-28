@@ -2,35 +2,44 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Send alerts to Alertmanager (the AM service in docker-compose)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 rule_files:
   - /etc/prometheus/rules.yml
 
 scrape_configs:
+  # Prometheus self-scrape
   - job_name: 'prometheus'
     static_configs:
       - targets: ['prometheus:9090']
 
+  # Node metrics from node-exporter (container DNS!)
   - job_name: 'node-exporter'
     static_configs:
       - targets: ['node-exporter:9100']
 
+  # HTTP health probes via blackbox exporter
   - job_name: 'blackbox_http'
     metrics_path: /probe
     params:
       module: [http_2xx]
     static_configs:
       - targets:
+          # Bedrock health URL (from env, with a sane default); can be http or https.
+          - '{{ lookup("env","BEDROCK_HEALTH_URL") | default("http://34.88.159.90", true) }}'
+          # Keep a self-probe so you always have at least one success series
           - 'http://prometheus:9090'
     relabel_configs:
+      # Take the original static target (e.g., http://example.com) and pass it as the 'target' query param
       - source_labels: [__address__]
         target_label: __param_target
+      # Set the instance label to the real target (nice in Grafana)
       - source_labels: [__param_target]
         target_label: instance
+      # Actually send the probe to the blackbox exporter service
       - target_label: __address__
         replacement: blackbox:9115
-
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: ['alertmanager:9093']
-
