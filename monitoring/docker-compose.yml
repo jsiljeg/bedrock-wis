@@ -44,7 +44,7 @@ services:
     pid: host
     network_mode: host
     command:
-      - --path.rootfs=/
+      - --path.rootfs=/host
     volumes:
       - /:/host:ro,rslave
       - /proc:/host/proc:ro
