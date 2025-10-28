@@ -41,14 +41,14 @@ services:
 
   node-exporter:
     image: prom/node-exporter:latest
-    pid: host
-    network_mode: host
     command:
       - --path.rootfs=/host
     volumes:
       - /:/host:ro,rslave
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+    expose:
+      - "9100"
     restart: unless-stopped
 
   blackbox:
