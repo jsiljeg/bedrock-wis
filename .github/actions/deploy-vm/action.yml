@@ -31,8 +31,9 @@ runs:
         TARBALL="/tmp/${{ inputs.tarball }}"
         TS=$(date -u +"%Y%m%d-%H%M%S")
         REL_DIR="${DEPLOY_PATH}/releases/${TS}"
+        SHARED_DIR="${DEPLOY_PATH}/shared"
 
-        sudo mkdir -p "${DEPLOY_PATH}/releases" "${DEPLOY_PATH}/shared/uploads"
+        sudo mkdir -p "${DEPLOY_PATH}/releases" "${SHARED_DIR}/uploads"
         sudo chown -R $USER:$USER "${DEPLOY_PATH}"
 
         mkdir -p "${REL_DIR}"
@@ -41,37 +42,46 @@ runs:
         echo "== sanity: top of release =="
         ls -lah "${REL_DIR}" | head -n 100
 
-        if [ ! -f "${REL_DIR}/web/wp/wp-includes/version.php" ]; then
-          echo "ERROR: WordPress core missing under ${REL_DIR}/web/wp"
-          echo "Show some files under web/ to debug:"
+        # Verify WP core is present in the release package
+        if [ ! -f "${REL_DIR}/web/wp/wp-settings.php" ]; then
+          echo "ERROR: WordPress core (web/wp) is missing in the release."
           find "${REL_DIR}/web" -maxdepth 3 -type f | sed "s|${REL_DIR}/||" | head -n 200 || true
           exit 1
         fi
 
-        # Verify WordPress core exists
-        if [ ! -f "${REL_DIR}/web/wp/wp-includes/version.php" ]; then
-          echo "ERROR: WordPress core missing under ${REL_DIR}/web/wp"
-          echo "Debug: show top-level of web and web/wp:"
-          find "${REL_DIR}/web" -maxdepth 2 -type f | sed "s|${REL_DIR}/||" | head -n 200 || true
-          exit 1
+        # --- Shared bits & permissions (critical for healthcheck) ---
+        # Ensure shared exists and readable by www-data group
+        sudo install -d -m 750 -o $USER -g www-data "${SHARED_DIR}"
+        # Ensure uploads exists and writable by www-data
+        sudo install -d -m 775 -o www-data -g www-data "${SHARED_DIR}/uploads"
+
+        # .env must exist and be readable by www-data
+        if [ -f "${SHARED_DIR}/.env" ]; then
+          sudo chgrp www-data "${SHARED_DIR}/.env"
+          sudo chmod 640 "${SHARED_DIR}/.env"
+        else
+          echo "WARNING: ${SHARED_DIR}/.env missing; creating empty placeholder (edit on server)."
+          sudo install -m 640 -o $USER -g www-data /dev/null "${SHARED_DIR}/.env"
         fi
 
-        # Sanity: ensure WordPress core is present
-        if [ ! -f "${REL_DIR}/web/wp/wp-settings.php" ]; then
-          echo "ERROR: WordPress core (web/wp) is missing in the release."
-          echo "Contents under ${REL_DIR}/web (depth 2) for debugging:"
-          find "${REL_DIR}/web" -maxdepth 2 -type f | sed "s|${REL_DIR}/||" | head -n 200 || true
-          exit 1
-        fi
-
-        # Link shared bits (.env and uploads)
-        if [ -f "${DEPLOY_PATH}/shared/.env" ]; then
-          ln -sfn "${DEPLOY_PATH}/shared/.env" "${REL_DIR}/.env"
-        fi
-        mkdir -p "${REL_DIR}/web/app/uploads"
+        # Link shared .env and uploads into the new release
+        ln -sfn "${SHARED_DIR}/.env" "${REL_DIR}/.env"
         rm -rf "${REL_DIR}/web/app/uploads"
-        ln -sfn "${DEPLOY_PATH}/shared/uploads" "${REL_DIR}/web/app/uploads"
+        ln -sfn "${SHARED_DIR}/uploads" "${REL_DIR}/web/app/uploads"
 
+        # Ensure Bedrock .htaccess exists (safety guard)
+        if [ ! -f "${REL_DIR}/web/.htaccess" ]; then
+          cat > "${REL_DIR}/web/.htaccess" <<'HT'
+        <IfModule mod_rewrite.c>
+        RewriteEngine On
+        RewriteBase /
+        RewriteRule ^index\.php$ - [L]
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteRule . /index.php [L]
+        </IfModule>
+        HT
+        fi
 
         # Ensure current is a symlink (not a directory)
         if [ -d "${DEPLOY_PATH}/current" ] && [ ! -L "${DEPLOY_PATH}/current" ]; then
@@ -79,17 +89,14 @@ runs:
           rm -rf "${DEPLOY_PATH}/current"
         fi
 
+        # Atomic switch
         ln -sfnT "${REL_DIR}" "${DEPLOY_PATH}/current"
 
-
-        # Swap current symlink atomically
-        ln -sfnT "${REL_DIR}" "${DEPLOY_PATH}/current"
-
-        # Adjust permissions (Apache/NGINX/PHP-FPM user may vary)
+        # Ownerships
         sudo chown -h $USER:$USER "${DEPLOY_PATH}/current"
-        sudo chown -R www-data:www-data "${REL_DIR}/web/app/uploads" || true
+        sudo chown -R www-data:www-data "${SHARED_DIR}/uploads" || true
 
-        # Reload services (adjust for your stack)
+        # Reload Apache (best-effort)
         if command -v systemctl >/dev/null 2>&1; then
           sudo systemctl reload apache2 || true
         fi
