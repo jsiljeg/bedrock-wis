@@ -55,7 +55,7 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Sage Theme (Bud, auto PM + cache)
+    name: Build Sage Theme (Bud, conditional cache)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,12 +78,36 @@ jobs:
             php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
           fi
 
-      - name: Use Node (+ Yarn cache)
+      # ---- setup-node WITHOUT cache first (we'll add cache conditionally below)
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # ---- Conditional cache: use exactly one of these three
+      - name: Enable Yarn cache
+        if: ${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: yarn
           cache-dependency-path: ${{ env.THEME_DIR }}/yarn.lock
+
+      - name: Enable pnpm cache
+        if: ${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: ${{ env.THEME_DIR }}/pnpm-lock.yaml
+
+      - name: Enable npm cache
+        if: ${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.THEME_DIR }}/package-lock.json
 
       - name: Install & build theme with Bud (auto PM)
         shell: bash
@@ -91,12 +115,11 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # Prefer Yarn (Sage default), then pnpm, then npm
           if [ -f yarn.lock ]; then
             corepack enable
             corepack prepare yarn@stable --activate
             yarn --version
-            # Cover Yarn 3+ (immutable) and Yarn 1.x (frozen-lockfile)
+            # Yarn 3+: try immutable, fallback to Yarn 1 flag
             (yarn install --immutable --immutable-cache) || yarn install --frozen-lockfile
             yarn build
 
@@ -112,7 +135,8 @@ jobs:
             npm run build
 
           else
-            # Last resort (shouldn’t happen with Sage)
+            echo "NOTE: No lockfile found (yarn.lock / pnpm-lock.yaml / package-lock.json)."
+            echo "Proceeding with npm install (non-deterministic)."
             npm install --no-audit --no-fund
             npm run build
           fi
@@ -122,7 +146,7 @@ jobs:
           echo "== Show entrypoints =="
           test -f public/entrypoints.json && head -n 50 public/entrypoints.json || true
 
-          # HARD REQUIREMENTS (fail early if Bud didn’t emit assets)
+          # HARD REQUIREMENTS
           test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json" && exit 1)
           css_count=$(ls public/*.css 2>/dev/null | wc -l || true)
           js_count=$(ls public/*.js  2>/dev/null | wc -l || true)
@@ -137,6 +161,7 @@ jobs:
           name: theme-build
           path: ${{ env.THEME_DIR }}
           retention-days: 3
+
 
   plugins_build:
     name: Assemble Plugins (GitHub sources)
