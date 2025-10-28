@@ -64,19 +64,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup PHP (with Composer preinstalled)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
       # Composer for theme (Acorn)
-      - name: Install PHP + Composer
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update -y
-          sudo apt-get install -y php-cli unzip
-          EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
-          php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-          ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-          [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
-          php composer-setup.php --quiet
-          rm composer-setup.php
+      #- name: Install PHP + Composer
+      #  shell: bash
+      #  run: |
+      #    set -euxo pipefail
+      #    sudo apt-get update -y
+      #    sudo apt-get install -y php-cli unzip
+      #    EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
+      #    php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+      #    ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+      #    [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
+      #    php composer-setup.php --quiet
+      #    rm composer-setup.php
 
       - name: Cache Composer (theme)
         uses: actions/cache@v4
@@ -377,7 +383,7 @@ jobs:
   monitoring_deploy:
     name: Deploy Monitoring Stack
     runs-on: ubuntu-latest
-    needs: [ deploy ]   # run after app deploy
+    needs: [ deploy ]
     steps:
       - uses: actions/checkout@v4
 
@@ -390,6 +396,14 @@ jobs:
           REMOTE_HOST: ${{ secrets.GCE_HOST }}
           REMOTE_USER: ${{ secrets.GCE_USER }}
           TARGET: ${{ secrets.GCE_DEPLOY_PATH }}/monitoring
+
+      # 🔧 Create the key file your next ssh step expects
+      - name: Prepare SSH key for follow-up commands
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.GCE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Render env & configs and (re)start compose
         shell: bash
@@ -424,9 +438,9 @@ jobs:
             -e "s#__ALERT_ENV__#${ALERT_ENV}#g" \
             alertmanager/alertmanager.yml
 
-          # 4) Start/Restart stack
-          docker compose pull
-          docker compose up -d
+          # 4) Start/Restart stack (use sudo if needed on your VM)
+          docker compose pull || sudo docker compose pull
+          docker compose up -d || sudo docker compose up -d
           EOS
 
   health_check:
