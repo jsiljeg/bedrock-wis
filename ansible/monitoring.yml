@@ -174,7 +174,7 @@
         project_name: monitoring
         state: present
         pull: always
-        recreate: smart
+        recreate: auto
         remove_orphans: true
 
     # --- Readiness checks ---
