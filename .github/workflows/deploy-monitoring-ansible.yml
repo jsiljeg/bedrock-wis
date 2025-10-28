@@ -41,52 +41,66 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Run Ansible playbook
+      - name: Run Ansible playbook (vault auto-detect)
         working-directory: ansible
         env:
-          # VM / paths
-          GCE_HOST:          ${{ secrets.GCE_HOST }}
-          GCE_USER:          ${{ secrets.GCE_USER }}
-          DEPLOY_PATH:       ${{ secrets.GCE_DEPLOY_PATH }}
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+          DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH }}
 
-          # Secrets your play turns into monitoring/.env on the VM
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
-          GF_ADMIN_USER:     ${{ secrets.GF_ADMIN_USER }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          GF_ADMIN_USER: ${{ secrets.GF_ADMIN_USER }}
           GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
 
-          # Vault (set ANSIBLE_VAULT_PASSWORD; ANSIBLE_VAULT_ID is optional)
-          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
-          ANSIBLE_VAULT_ID:       ${{ secrets.ANSIBLE_VAULT_ID }}
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}  # REQUIRED
         run: |
           set -euo pipefail
 
           # If your role uses community.docker modules, install the collection (safe if re-run)
           ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
 
-          VAULT_FLAG=""
-          if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
-            # write a local .vault file (not committed)
-            printf '%s' "$ANSIBLE_VAULT_PASSWORD" > .vault
-            chmod 600 .vault
+          # 1) Write vault password to a local file (no newline issues)
+          printf '%s' "$ANSIBLE_VAULT_PASSWORD" > .vault
+          chmod 600 .vault
 
-            # Use a named vault-id if your vault header includes one; otherwise just the password file
-            if [ -n "${ANSIBLE_VAULT_ID:-}" ]; then
-              VAULT_FLAG="--vault-id ${ANSIBLE_VAULT_ID}@.vault"
-            else
-              VAULT_FLAG="--vault-password-file .vault"
-            fi
+          # 2) Detect vault header & optional ID
+          HEADER="$(head -n1 group_vars/all/vault.yml || true)"
+          echo "Vault header: $HEADER"
+          # Header looks like: $ANSIBLE_VAULT;1.1;AES256[;optional-id]
+          VAULT_ID=""
+          if [[ "$HEADER" =~ ^\\$ANSIBLE_VAULT;[0-9.]+;AES256;([^;[:space:]]+)$ ]]; then
+            VAULT_ID="${BASH_REMATCH[1]}"
+            echo "Detected vault id: $VAULT_ID"
           else
-            echo "::error::ANSIBLE_VAULT_PASSWORD secret is not set; cannot decrypt group_vars/all/vault.yml"
-            exit 1
+            echo "No explicit vault id in header."
           fi
 
-          # Optional quick sanity (won't print contents; just verifies the password is valid)
-          ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null
+          # 3) Build flags and sanity-check decryption
+          # Try the most compatible first: --vault-password-file
+          VAULT_FLAG="--vault-password-file .vault"
+          if ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null 2>&1; then
+            echo "Decryption ok with password-file."
+          else
+            # If header had an id, try that form; else try '@.vault' form
+            if [ -n "$VAULT_ID" ]; then
+              VAULT_FLAG="--vault-id ${VAULT_ID}@.vault"
+              echo "Retrying decryption with named id: $VAULT_FLAG"
+              ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null \
+                || { echo "::error::Vault password does not match the named id '$VAULT_ID'"; exit 1; }
+            else
+              VAULT_FLAG="--vault-id @.vault"
+              echo "Retrying decryption with env-style id: $VAULT_FLAG"
+              ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null \
+                || { echo "::error::Vault password incorrect (no id). Check ANSIBLE_VAULT_PASSWORD."; exit 1; }
+            fi
+          fi
 
+          # 4) Run playbook
           ansible-playbook -i inventory.ini monitoring.yml \
             $VAULT_FLAG \
             --extra-vars "target_host=${GCE_HOST} target_user=${GCE_USER} deploy_path=${DEPLOY_PATH}"
+
 
       - name: Post-deploy health checks (via SSH)
         if: inputs.run-health-checks == true
