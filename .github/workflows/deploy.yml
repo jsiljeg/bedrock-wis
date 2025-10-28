@@ -83,28 +83,30 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Ensure package-lock.json (for caching)
+      - name: Install & build theme with Bud
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
-          if [ ! -f package-lock.json ]; then
-            npm i --package-lock-only
-          fi
-
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.THEME_DIR }}/node_modules
-          key: node-mod-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
-          restore-keys: |
-            node-mod-${{ runner.os }}-
-
-      - name: Install & build theme
-        shell: bash
-        working-directory: ${{ env.THEME_DIR }}
-        run: |
+          set -euxo pipefail
+          node -v
           npm ci
-          npm run build
+          # Be explicit: run bud build (npm run build should do this, but we force it)
+          npx bud --version || true
+          npx bud build
+
+          echo "== List public =="
+          ls -la public || true
+          echo "== Show entrypoints =="
+          test -f public/entrypoints.json && head -n 50 public/entrypoints.json || true
+
+          # HARD REQUIREMENTS
+          test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json" && exit 1)
+          css_count=$(ls public/*.css 2>/dev/null | wc -l || true)
+          js_count=$(ls public/*.js  2>/dev/null | wc -l || true)
+          if [ "$css_count" -eq 0 ] || [ "$js_count" -eq 0 ]; then
+            echo "ERROR: missing compiled CSS/JS in public/"
+            exit 1
+          fi
 
       - name: Upload theme artifact
         uses: actions/upload-artifact@v4

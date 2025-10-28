@@ -27,12 +27,14 @@ runs:
       run: |
         ssh -i ~/.ssh/id_rsa ${{ inputs.user }}@${{ inputs.host }} bash -se << 'EOS'
         set -euo pipefail
+
         DEPLOY_PATH="${{ inputs.deploy-path }}"
         TARBALL="/tmp/${{ inputs.tarball }}"
         TS=$(date -u +"%Y%m%d-%H%M%S")
         REL_DIR="${DEPLOY_PATH}/releases/${TS}"
         SHARED_DIR="${DEPLOY_PATH}/shared"
 
+        # --- Prepare dirs and ownership ---------------------------------------------------------
         sudo mkdir -p "${DEPLOY_PATH}/releases" "${SHARED_DIR}/uploads"
         sudo chown -R $USER:$USER "${DEPLOY_PATH}"
 
@@ -49,11 +51,16 @@ runs:
           exit 1
         fi
 
-        # --- Shared bits & permissions (critical for healthcheck) ---
-        # Ensure shared exists and readable by www-data group
+        # --- Shared bits & permissions ----------------------------------------------------------
+        # Ensure shared root is group-readable by www-data
         sudo install -d -m 750 -o $USER -g www-data "${SHARED_DIR}"
+
         # Ensure uploads exists and writable by www-data
         sudo install -d -m 775 -o www-data -g www-data "${SHARED_DIR}/uploads"
+
+        # Ensure Acorn/Sage shared cache exists (framework cache + compiled views)
+        sudo install -d -m 775 -o www-data -g www-data "${SHARED_DIR}/cache/acorn/framework/cache"
+        sudo install -d -m 775 -o www-data -g www-data "${SHARED_DIR}/cache/acorn/framework/views"
 
         # .env must exist and be readable by www-data
         if [ -f "${SHARED_DIR}/.env" ]; then
@@ -64,10 +71,30 @@ runs:
           sudo install -m 640 -o $USER -g www-data /dev/null "${SHARED_DIR}/.env"
         fi
 
-        # Link shared .env and uploads into the new release
+        # --- Link shared files into the new release --------------------------------------------
         ln -sfn "${SHARED_DIR}/.env" "${REL_DIR}/.env"
+
+        # uploads → shared
         rm -rf "${REL_DIR}/web/app/uploads"
         ln -sfn "${SHARED_DIR}/uploads" "${REL_DIR}/web/app/uploads"
+
+        # cache → shared (replace any real dir with symlink)
+        if [ -e "${REL_DIR}/web/app/cache" ] && [ ! -L "${REL_DIR}/web/app/cache" ]; then
+          rm -rf "${REL_DIR}/web/app/cache"
+        fi
+        ln -sfn "${SHARED_DIR}/cache" "${REL_DIR}/web/app/cache"
+
+        # Safety perms for cache tree
+        sudo find "${SHARED_DIR}/cache" -type d -exec chmod 775 {} \; || true
+        sudo find "${SHARED_DIR}/cache" -type f -exec chmod 664 {} \; || true
+
+        # --- Optional: sanity on Sage assets ----------------------------------------------------
+        if [ -d "${REL_DIR}/web/app/themes/sage/public" ]; then
+          if [ ! -f "${REL_DIR}/web/app/themes/sage/public/entrypoints.json" ]; then
+            echo "WARNING: Sage public/entrypoints.json missing (assets may not load)."
+            ls -la "${REL_DIR}/web/app/themes/sage/public" || true
+          fi
+        fi
 
         # Ensure Bedrock .htaccess exists (safety guard)
         if [ ! -f "${REL_DIR}/web/.htaccess" ]; then
@@ -83,25 +110,24 @@ runs:
         HT
         fi
 
-        # Ensure current is a symlink (not a directory)
+        # --- Atomic switch ----------------------------------------------------------------------
         if [ -d "${DEPLOY_PATH}/current" ] && [ ! -L "${DEPLOY_PATH}/current" ]; then
           echo "Detected directory at ${DEPLOY_PATH}/current — removing to replace with symlink."
           rm -rf "${DEPLOY_PATH}/current"
         fi
-
-        # Atomic switch
         ln -sfnT "${REL_DIR}" "${DEPLOY_PATH}/current"
 
         # Ownerships
         sudo chown -h $USER:$USER "${DEPLOY_PATH}/current"
         sudo chown -R www-data:www-data "${SHARED_DIR}/uploads" || true
+        sudo chown -R www-data:www-data "${SHARED_DIR}/cache"   || true
 
-        # Reload Apache (best-effort)
+        # --- Reload Apache (best-effort) --------------------------------------------------------
         if command -v systemctl >/dev/null 2>&1; then
           sudo systemctl reload apache2 || true
         fi
 
-        # Keep last 5 releases
+        # --- Keep last 5 releases ---------------------------------------------------------------
         cd "${DEPLOY_PATH}/releases"
         ls -1t | tail -n +6 | xargs -r rm -rf
 
