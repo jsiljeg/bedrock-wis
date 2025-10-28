@@ -235,6 +235,23 @@ jobs:
           set -e
           [ -f web/wp/wp-settings.php ] || { echo "ERROR: web/wp missing from release"; exit 1; }
 
+      - name: Require Acorn plugin into Bedrock (no dev, permissive)
+        run: |
+          set -euxo pipefail
+          # allow acorn installer if present
+          composer config --no-interaction allow-plugins.roots/acorn-installer true || true
+
+          # Try Acorn v5 first (Sage 10 works with it). Allow full dep graph updates.
+          if ! composer require -W roots/acorn:^5.0 --no-interaction --no-progress --prefer-dist --no-dev; then
+            echo "Acorn ^5 failed; falling back to Acorn ^4 (Symfony 6 compatible)"
+            composer remove roots/acorn --no-interaction || true
+            composer require -W roots/acorn:^4.4 --no-interaction --no-progress --prefer-dist --no-dev
+          fi
+
+          # Must exist after require:
+          test -f web/app/plugins/acorn/acorn.php
+
+
       - name: Bundle release tarball
         id: bundle
         run: |
@@ -310,6 +327,18 @@ jobs:
             wp --path=web/wp option update permalink_structure '/%postname%/' || true
             wp --path=web/wp rewrite flush --hard || true
           fi
+          EOS
+
+      - name: Activate Acorn plugin
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se << 'EOS'
+          set -euo pipefail
+          cd "${{ secrets.GCE_DEPLOY_PATH }}/current"
+          test -f web/app/plugins/acorn/acorn.php
+          wp --path=web/wp plugin activate acorn || true
+          wp --path=web/wp acorn optimize:clear || true
+          wp --path=web/wp acorn view:clear || true
           EOS
 
 
