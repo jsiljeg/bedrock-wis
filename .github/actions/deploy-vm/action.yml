@@ -92,8 +92,6 @@ runs:
         # Reload services (adjust for your stack)
         if command -v systemctl >/dev/null 2>&1; then
           sudo systemctl reload apache2 || true
-          sudo systemctl reload php8.2-fpm || true
-          sudo systemctl reload nginx || true
         fi
 
         # Keep last 5 releases
