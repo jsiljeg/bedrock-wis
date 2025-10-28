@@ -55,31 +55,31 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Theme (auto Bud/Vite + max cache)
+    name: Build Sage Theme (Bud)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # 1) Composer cache (for Acorn in theme)
-      - name: Cache Composer
+      - name: Clone Sage 10 (Bud)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "${THEME_DIR}"
+          mkdir -p "$(dirname "${THEME_DIR}")"
+          git clone --depth=1 --branch 10.7.0 https://github.com/roots/sage "${THEME_DIR}"
+
+      - name: Cache Composer (theme)
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.composer/cache
-            ~/.cache/composer
+          path: ~/.cache/composer
           key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}
           restore-keys: |
             composer-${{ runner.os }}-
 
-      # 2) Ensure theme exists + install Acorn (no dev)
-      - name: Ensure theme present (clone + composer)
+      - name: PHP composer for theme (Acorn)
         shell: bash
         run: |
           set -euxo pipefail
-          if [ ! -d "${THEME_DIR}" ] || [ ! -f "${THEME_DIR}/package.json" ]; then
-            mkdir -p "$(dirname "${THEME_DIR}")"
-            git clone --depth=1 https://github.com/roots/sage "${THEME_DIR}"
-          fi
           sudo apt-get update -y
           sudo apt-get install -y php-cli unzip
           EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
@@ -90,163 +90,44 @@ jobs:
           rm composer-setup.php
           php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
 
-      # 3) Make sure a lockfile exists BEFORE caching (so caches don't get skipped)
-      - name: Ensure JS lockfile exists
+      - name: Setup Node (Bud)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Ensure npm lockfile for cache
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
-          set -euxo pipefail
-          if [ ! -f yarn.lock ] && [ ! -f pnpm-lock.yaml ] && [ ! -f package-lock.json ]; then
-            # Prefer yarn if repo hints at it, else npm
-            if grep -qi '"bud"' package.json || grep -qi '"yarn' package.json; then
-              corepack enable
-              corepack prepare yarn@stable --activate
-              yarn --version
-              yarn install --mode update-lockfile --ignore-scripts || true
-            else
-              npm i --package-lock-only
-            fi
+          if [ ! -f package-lock.json ]; then
+            npm i --package-lock-only
           fi
-          ls -1 yarn.lock pnpm-lock.yaml package-lock.json 2>/dev/null || true
 
-      # 4) Node setup + package-manager caches
-      - name: Use Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Enable Yarn cache
-        if: ${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: yarn
-          cache-dependency-path: ${{ env.THEME_DIR }}/yarn.lock
-
-      - name: Enable pnpm cache
-        if: ${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: ${{ env.THEME_DIR }}/pnpm-lock.yaml
-
-      - name: Enable npm cache
-        if: ${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.THEME_DIR }}/package-lock.json
-
-      # 5) node_modules cache (biggest win)
       - name: Cache node_modules
         uses: actions/cache@v4
         with:
           path: ${{ env.THEME_DIR }}/node_modules
-          key: nm-${{ runner.os }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
+          key: node-mod-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
           restore-keys: |
-            nm-${{ runner.os }}-
+            node-mod-${{ runner.os }}-
 
-      # 6) Bud/webpack cache
-      - name: Cache build cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.THEME_DIR }}/node_modules/.cache
-          key: budcache-${{ runner.os }}-${{ hashFiles(format('{0}/package.json', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
-          restore-keys: |
-            budcache-${{ runner.os }}-
-
-      # 7) Install & build (auto-detect Bud vs Vite)
-      - name: Install & build theme
+      - name: Build with Bud
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
           set -euxo pipefail
-
-          # Detect PM
-          if [ -f yarn.lock ]; then
-            corepack enable
-            corepack prepare yarn@stable --activate
-            PM="yarn"
-          elif [ -f pnpm-lock.yaml ]; then
-            corepack enable
-            corepack prepare pnpm@latest --activate
-            PM="pnpm"
-          elif [ -f package-lock.json ]; then
-            PM="npm"
-          else
-            PM="npm"
-          fi
-
-          # Install
-          case "$PM" in
-            yarn) yarn install --immutable --immutable-cache || yarn install --frozen-lockfile ;;
-            pnpm) pnpm install --frozen-lockfile ;;
-            npm)  npm ci || npm install --no-audit --no-fund ;;
-          esac
-
-          # Detect tool: Bud vs Vite
-          if [ -f bud.config.js ] || [ -f bud.config.ts ] || grep -qi '"bud' package.json; then
-            TOOL="bud"
-          elif [ -f vite.config.js ] || [ -f vite.config.ts ] || grep -qi '"vite' package.json; then
-            TOOL="vite"
-          else
-            # Fallback: try bud first, then vite
-            TOOL="auto"
-          fi
-
-          # Build
-          if [ "$TOOL" = "bud" ]; then
-            case "$PM" in
-              yarn) yarn build ;;
-              pnpm) pnpm run build ;;
-              npm)  npm run build ;;
-            esac
-            # Verify Bud outputs
-            test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json (Bud)" && exit 1)
-
-          elif [ "$TOOL" = "vite" ]; then
-            case "$PM" in
-              yarn) yarn build ;;
-              pnpm) pnpm run build ;;
-              npm)  npm run build ;;
-            esac
-            # Verify Vite outputs
-            test -f public/build/manifest.json || (echo "ERROR: missing public/build/manifest.json (Vite)" && exit 1)
-
-          else
-            # Try Bud, then Vite
-            if (case "$PM" in yarn) yarn build ;; pnpm) pnpm run build ;; npm) npm run build ;; esac); then
-              :
-            else
-              echo "Primary build script failed; trying 'vite build' explicitly"
-              npx vite build
-            fi
-            if [ -f public/entrypoints.json ]; then
-              :
-            elif [ -f public/build/manifest.json ]; then
-              :
-            else
-              echo "ERROR: No Bud or Vite artifacts found."
-              exit 1
-            fi
-          fi
-
-          echo "== List public =="
+          npm ci
+          npx bud build
+          echo "== list public =="
           ls -la public || true
-          echo "== Bud/Vite artifacts =="
-          test -f public/entrypoints.json && head -n 50 public/entrypoints.json || true
-          test -f public/build/manifest.json && head -n 50 public/build/manifest.json || true
+          test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json" && exit 1)
 
-      # 8) Upload the built theme
       - name: Upload theme artifact
         uses: actions/upload-artifact@v4
         with:
           name: theme-build
           path: ${{ env.THEME_DIR }}
           retention-days: 3
-
 
   plugins_build:
     name: Assemble Plugins (GitHub sources)
