@@ -235,32 +235,34 @@ jobs:
           set -e
           [ -f web/wp/wp-settings.php ] || { echo "ERROR: web/wp missing from release"; exit 1; }
 
-      - name: Install Acorn plugin into Bedrock (no-dev, conflict-safe)
+      - name: Install Acorn plugin into Bedrock (conflict-safe, no-dev)
+        shell: bash
         run: |
           set -euxo pipefail
           export COMPOSER_NO_INTERACTION=1
           export COMPOSER_NO_AUDIT=1
 
-          # 0) Allow acorn installer plugin if present
+          # allow acorn's composer plugin if present
           composer config allow-plugins.roots/acorn-installer true || true
 
-          # 1) Make sure lock does not pin dev deps that conflict (wp-cli bundle)
-          #    This edits require-dev and updates the lock WITHOUT dev.
+          # Strip the dev-only WP-CLI meta to avoid symfony/process replacement conflicts in the lock
           if composer show --locked wp-cli/wp-cli-bundle >/dev/null 2>&1; then
             composer remove --dev wp-cli/wp-cli-bundle --no-update || true
             composer update --no-dev --no-progress --prefer-dist
           fi
 
-          # Helper that writes the constraint (no-update), then updates only what's needed (no-dev)
-          try_acorn() {
-            ver="$1"
+          # helper: try to add acorn with a constrained, targeted update
+          try_acorn () {
+            local ver="$1"
             composer require roots/acorn:"$ver" -W --no-update --no-progress --prefer-dist
+            # this is the only line that may fail; on failure we return non-zero
             composer update roots/acorn --with-all-dependencies --no-dev --no-progress --prefer-dist
+            # confirm via composer (not via a WP path)
+            composer show roots/acorn | grep -E '^versions\s*:' >/dev/null
             composer install --no-dev --no-progress --prefer-dist -o
-            test -f web/app/plugins/acorn/acorn.php
           }
 
-          # 2) Prefer Acorn v5 (works with Sage 10 & 11), fallback to v4.4 if constraints resist
+          # Prefer Acorn v5, fallback to v4.4 only if the update fails
           if ! try_acorn '^5.0'; then
             echo 'Acorn ^5 failed; falling back to ^4.4 (Symfony 6 compatible)'
             composer remove roots/acorn --no-update || true
@@ -344,16 +346,21 @@ jobs:
           fi
           EOS
 
-      - name: Activate Acorn + clear caches
+      - name: Activate Acorn + clear caches on VM
         shell: bash
         run: |
           ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se << 'EOS'
           set -euo pipefail
           cd "${{ secrets.GCE_DEPLOY_PATH }}/current"
-          wp --path=web/wp plugin activate acorn || true
+          # If Acorn shows up as a plugin, activate it.
+          if wp --path=web/wp plugin list --field=name | grep -qx acorn; then
+            wp --path=web/wp plugin activate acorn || true
+          fi
+          # Clear Acorn caches if CLI is available (works when plugin is active)
           wp --path=web/wp acorn optimize:clear || true
           wp --path=web/wp acorn view:clear || true
           EOS
+
 
   health_check:
     name: Health Check
