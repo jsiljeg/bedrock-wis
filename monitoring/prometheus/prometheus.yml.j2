@@ -10,10 +10,9 @@ scrape_configs:
     static_configs:
       - targets: ['prometheus:9090']
 
-  - job_name: 'node'
+  - job_name: 'node-exporter'
     static_configs:
-      - targets: ['127.0.0.1:9100']
-    metrics_path: /metrics
+      - targets: ['node-exporter:9100']
 
   - job_name: 'blackbox_http'
     metrics_path: /probe
@@ -21,7 +20,7 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       - targets:
-          - '{{ bedrock_health_url }}'
+          - 'http://prometheus:9090'
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -29,3 +28,9 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox:9115
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+

@@ -1,51 +1,73 @@
-- name: Ensure monitoring dir exists
+- name: Ensure base dir exists
   file:
-    path: "{{ monitoring_dir }}"
+    path: /var/www/bedrock
     state: directory
-    owner: root
-    group: root
     mode: "0755"
 
-- name: Template docker-compose.yml
+- name: Copy monitoring tree from repo (idempotent)
+  synchronize:
+    src: "{{ playbook_dir }}/../monitoring/"
+    dest: /var/www/bedrock/
+    delete: no
+  delegate_to: localhost
+
+# ---- render config templates that live inside monitoring/ ----
+- name: Render Prometheus config
+  template:
+    src: "{{ playbook_dir }}/../monitoring/prometheus/prometheus.yml.j2"
+    dest: /var/www/bedrock/prometheus/prometheus.yml
+    mode: "0644"
+  notify: Restart stack
+
+- name: Render Alertmanager config
+  template:
+    src: "{{ playbook_dir }}/../monitoring/alertmanager/alertmanager.yml.j2"
+    dest: /var/www/bedrock/alertmanager/alertmanager.yml
+    mode: "0644"
+  notify: Restart stack
+
+# ---- render .env and compose from role templates ----
+- name: Render .env
+  template:
+    src: .env.j2
+    dest: /var/www/bedrock/.env
+    mode: "0600"
+  notify: Restart stack
+
+- name: Render docker-compose.yml
   template:
     src: docker-compose.yml.j2
-    dest: "{{ monitoring_dir }}/docker-compose.yml"
-    owner: root
-    group: root
+    dest: /var/www/bedrock/docker-compose.yml
     mode: "0644"
+  notify: Restart stack
 
-- name: Ensure subdir for alertmanager config
-  file:
-    path: "{{ monitoring_dir }}/alertmanager"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
+# Optional: ensure Docker is up (if docker role didn’t do it)
+- name: Ensure docker service running
+  service:
+    name: docker
+    state: started
+    enabled: true
 
-- name: Template Alertmanager config
-  template:
-    src: alertmanager.yml.j2.j2
-    dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml.j2"
-    owner: root
-    group: root
-    mode: "0644"
+- name: Pull images & start stack
+  shell: |
+    set -e
+    docker compose -f /var/www/bedrock/docker-compose.yml up -d --pull=always
+  register: upout
+  changed_when: "'Started' in upout.stdout or 'Pulled' in upout.stdout"
 
-- name: Template .env (Grafana + Slack) WITHOUT committing to git
-  template:
-    src: env.j2
-    dest: "{{ monitoring_dir }}/.env"
-    owner: root
-    group: root
-    mode: "0600"
-  no_log: true  # hide secrets in logs
+# Health: make sure Prometheus is up (Grafana/AM checks are in your GHA)
+- name: Wait Prometheus ready
+  uri:
+    url: http://127.0.0.1:9090/-/ready
+    status_code: 200
+  register: _pm
+  retries: 12
+  delay: 5
+  until: _pm.status == 200
 
-- name: Pull images
-  community.docker.docker_compose_v2:
-    project_src: "{{ monitoring_dir }}"
-    pull: always
-
-- name: Up containers
-  community.docker.docker_compose_v2:
-    project_src: "{{ monitoring_dir }}"
-    state: present
-    build: false
+# Handler
+- name: Restart stack
+  listen: Restart stack
+  shell: |
+    set -e
+    docker compose -f /var/www/bedrock/docker-compose.yml up -d

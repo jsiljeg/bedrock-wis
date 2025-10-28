@@ -1,0 +1,26 @@
+{{ define "slack.title" -}}
+[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+(severity: {{ or .CommonLabels.severity "unknown" }})
+{{- end }}
+
+{{ define "slack.text" -}}
+*Group Labels:* {{ range $k,$v := .CommonLabels }}`{{ $k }}={{ $v }}` {{ end }}
+
+{{- if gt (len .Alerts) 0 }}
+*Alerts ({{ len .Alerts }}):*
+{{- range .Alerts }}
+• *{{ .Labels.instance | default "n/a" }}* — {{ or .Annotations.summary .Annotations.description .Labels.alertname }} ({{ .Status }})
+  *Started:* {{ .StartsAt }}
+  {{- if .EndsAt }}  *Ended:* {{ .EndsAt }}{{ end }}
+  {{- if .GeneratorURL }}  *Source:* <{{ .GeneratorURL }}|Prometheus>{{ end }}
+{{- end }}
+{{- end }}
+
+{{- if .CommonAnnotations.runbook_url }}
+*Runbook:* <{{ .CommonAnnotations.runbook_url }}|open>
+{{- end }}
+
+{{- if .ExternalURL }}
+*Alertmanager:* <{{ .ExternalURL }}|web UI>
+{{- end }}
+{{- end }}

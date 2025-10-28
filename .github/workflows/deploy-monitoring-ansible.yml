@@ -66,12 +66,30 @@ jobs:
         if: inputs.run-health-checks == true
         run: |
           set -euo pipefail
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
-            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
-          set -euo pipefail
-          # If your docker compose plugin uses /usr/bin/docker, both "docker compose" and "docker-compose" should be fine.
-          curl -fsS http://127.0.0.1:9090/-/ready
-          curl -fsS http://127.0.0.1:9093/-/ready
-          curl -fsS http://127.0.0.1:3000/api/health
-          docker compose -f /var/www/bedrock/shared/monitoring/docker-compose.yml ps
-          EOS
+          COMPOSE="/var/www/bedrock/docker-compose.yml"
+
+          check() {
+            local url="$1"
+            echo "Checking: $url"
+            curl -fsS --retry 6 --retry-delay 2 --retry-connrefused "$url" && echo "✅ $url" && return 0
+            echo "❌ $url"; return 1
+          }
+
+          # Prometheus
+          check http://127.0.0.1:9090/-/ready
+
+          # Alertmanager (try multiple endpoints)
+          check http://127.0.0.1:9093/-/ready || \
+          check http://127.0.0.1:9093/-/healthy || \
+          check http://127.0.0.1:9093/api/v2/status
+
+          # Grafana
+          check http://127.0.0.1:3000/api/health
+
+          # Show compose state if anything failed
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            docker compose -f "$COMPOSE" ps || true
+          fi
+          exit $rc
+
