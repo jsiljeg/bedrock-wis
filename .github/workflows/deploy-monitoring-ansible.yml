@@ -8,6 +8,17 @@ on:
         type: boolean
         default: true
 
+  push:
+    branches:
+      - master
+    paths:
+      # Only run when monitoring stack or its playbook/templates change
+      - 'monitoring/**'
+      - 'ansible/monitoring.yml'
+      - 'ansible/roles/monitoring/**'
+      - 'ansible/roles/docker/**'
+      - '.github/workflows/deploy-monitoring-ansible.yml'
+
 permissions:
   contents: read
 
