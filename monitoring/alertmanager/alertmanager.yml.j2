@@ -5,14 +5,12 @@ templates:
   - /etc/alertmanager/templates/*.tmpl
 
 route:
-  # Default receiver for everything
   receiver: slack_default
   group_by: ['alertname', 'job', 'instance']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 12h
 
-  # Example: send criticals to a (possibly different) Slack channel
   routes:
     - matchers:
         - severity="critical"
@@ -22,23 +20,21 @@ route:
 receivers:
   - name: slack_default
     slack_configs:
-      - api_url: '{{ lookup("env","SLACK_WEBHOOK_URL") }}'
-        channel: '{{ lookup("env","SLACK_CHANNEL") | default("#alerts", true) }}'
+      - api_url: "{{ lookup('env','SLACK_WEBHOOK_URL') }}"
+        channel: "{{ lookup('env','SLACK_CHANNEL') | default('#alerts', true) }}"
         send_resolved: true
-        title: '{{ template "slack.title" . }}'
-        text: '{{ template "slack.text" . }}'
+        {% raw %}title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'{% endraw %}
 
   - name: slack_critical
     slack_configs:
-      - api_url: '{{ lookup("env","SLACK_WEBHOOK_URL") }}'
-        # Falls back to SLACK_CHANNEL if SLACK_CHANNEL_CRITICAL not set
-        channel: '{{ lookup("env","SLACK_CHANNEL_CRITICAL") | default(lookup("env","SLACK_CHANNEL") | default("#alerts", true), true) }}'
+      - api_url: "{{ lookup('env','SLACK_WEBHOOK_URL') }}"
+        channel: "{{ lookup('env','SLACK_CHANNEL_CRITICAL') | default(lookup('env','SLACK_CHANNEL') | default('#alerts', true), true) }}"
         send_resolved: true
-        title: '{{ template "slack.title" . }}'
-        text: '{{ template "slack.text" . }}'
+        {% raw %}title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'{% endraw %}
 
 inhibit_rules:
-  # If critical is firing, suppress warning of same alert/instance
   - source_matchers: ['severity="critical"']
     target_matchers: ['severity="warning"']
     equal: ['alertname', 'instance']
