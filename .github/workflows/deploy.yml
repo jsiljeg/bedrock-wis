@@ -92,11 +92,17 @@ jobs:
           restore-keys: |
             composer-${{ runner.os }}-
 
+      #- name: Composer install (no-dev) in theme
+      #  shell: bash
+      #  run: |
+      #    set -euxo pipefail
+      #    php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev --prefer-dist
+
       - name: Composer install (no-dev) in theme
         shell: bash
         run: |
           set -euxo pipefail
-          php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev --prefer-dist
+          composer --working-dir="${THEME_DIR}" install --no-interaction --no-dev --prefer-dist
 
       # Node + Yarn with built-in cache
       - name: Setup Node (Yarn cache)
