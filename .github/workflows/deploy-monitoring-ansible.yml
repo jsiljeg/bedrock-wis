@@ -41,10 +41,13 @@ jobs:
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
           GF_ADMIN_USER: ${{ secrets.GF_ADMIN_USER }}
           GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
+
+          # If you use vault
           VAULT_PASS: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
-          VAULT_ID: ${{ secrets.ANSIBLE_VAULT_ID }} # leave empty if your vault header has no id
+          # Optional: set only if your vault header ends with ;<id> (e.g. ;default or ;dev)
+          VAULT_ID: ${{ secrets.ANSIBLE_VAULT_ID }}
         run: |
-          # ⬇️ write the script INSIDE the ansible/ dir so the container can see it at /workspace/ansible/run.sh
+          # write the script into ansible/ so -w /workspace/ansible can see it
           mkdir -p ansible
           cat > ansible/run.sh <<'BASH'
           set -euo pipefail
@@ -58,13 +61,17 @@ jobs:
           export ANSIBLE_PRIVATE_KEY_FILE=/tmp/id_rsa
           export ANSIBLE_HOST_KEY_CHECKING=False
 
-          # Pick the right --vault-id form based on whether a vault id name is provided
+          # Write vault password (if provided) to a file *inside* the container
           VAULT_FLAG=""
           if [ -n "${VAULT_PASS:-}" ]; then
+            printf "%s" "$VAULT_PASS" > /tmp/.vault
+            chmod 600 /tmp/.vault
             if [ -n "${VAULT_ID:-}" ]; then
-              VAULT_FLAG="--vault-id ${VAULT_ID}@env:VAULT_PASS"
+              # if your vault header has an id (e.g. ;default), use vault-id with a file source
+              VAULT_FLAG="--vault-id ${VAULT_ID}@/tmp/.vault"
             else
-              VAULT_FLAG="--vault-id @env:VAULT_PASS"
+              # otherwise, plain password-file works with any Ansible version
+              VAULT_FLAG="--vault-password-file /tmp/.vault"
             fi
           fi
 
@@ -79,7 +86,6 @@ jobs:
 
           chmod +x ansible/run.sh
 
-          # 🚀 Execute Ansible inside container (workdir points to /workspace/ansible)
           docker run --rm \
             -v "$PWD:/workspace" \
             -v "$HOME/.ssh/id_rsa:/root/.ssh/id_rsa:ro" \
@@ -94,6 +100,7 @@ jobs:
             -e VAULT_PASS \
             -e VAULT_ID \
             alpine/ansible sh -lc "./run.sh"
+
 
 
       - name: Post-deploy health checks (via SSH)
