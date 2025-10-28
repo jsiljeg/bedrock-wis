@@ -55,28 +55,26 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Sage Theme (Bud)
+    name: Build Sage 10 (Bud, cached)
     runs-on: ubuntu-latest
+    env:
+      THEME_DIR: web/app/themes/sage
+      NODE_VERSION: "20"
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone Sage 10 (Bud)
+      # Clone Sage 10 — pin exact tag for reproducibility
+      - name: Clone Sage 10.8.2 (Bud)
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf "${THEME_DIR}"
           mkdir -p "$(dirname "${THEME_DIR}")"
-          git clone --depth=1 --branch 10.7.0 https://github.com/roots/sage "${THEME_DIR}"
+          git clone --depth=1 --branch v10.8.2 https://github.com/roots/sage "${THEME_DIR}"
 
-      - name: Cache Composer (theme)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/composer
-          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}
-          restore-keys: |
-            composer-${{ runner.os }}-
-
-      - name: PHP composer for theme (Acorn)
+      # Composer for theme (Acorn)
+      - name: Install PHP + Composer
         shell: bash
         run: |
           set -euxo pipefail
@@ -88,38 +86,47 @@ jobs:
           [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
           php composer-setup.php --quiet
           rm composer-setup.php
-          php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
 
-      - name: Setup Node (Bud)
+      - name: Cache Composer (theme)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}
+          restore-keys: |
+            composer-${{ runner.os }}-
+
+      - name: Composer install (no-dev) in theme
+        shell: bash
+        run: |
+          set -euxo pipefail
+          php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev --prefer-dist
+
+      # Node + Yarn with built-in cache
+      - name: Setup Node (Yarn cache)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: ${{ env.THEME_DIR }}/yarn.lock
 
-      - name: Ensure npm lockfile for cache
-        shell: bash
-        working-directory: ${{ env.THEME_DIR }}
-        run: |
-          if [ ! -f package-lock.json ]; then
-            npm i --package-lock-only
-          fi
-
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.THEME_DIR }}/node_modules
-          key: node-mod-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
-          restore-keys: |
-            node-mod-${{ runner.os }}-
-
-      - name: Build with Bud
+      - name: Build theme (Bud)
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
           set -euxo pipefail
-          npm ci
-          npx bud build
-          echo "== list public =="
+          corepack enable
+          yarn --version
+          yarn install --frozen-lockfile
+          # Clean any Vite leftovers just in case
+          rm -rf public/build || true
+          yarn build
+
+          echo "== List public =="
           ls -la public || true
+          echo "== Show Bud entrypoints =="
+          test -f public/entrypoints.json && head -n 50 public/entrypoints.json || true
+
+          # HARD REQUIREMENT for Sage 10 (Bud)
           test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json" && exit 1)
 
       - name: Upload theme artifact
@@ -128,6 +135,7 @@ jobs:
           name: theme-build
           path: ${{ env.THEME_DIR }}
           retention-days: 3
+
 
   plugins_build:
     name: Assemble Plugins (GitHub sources)
