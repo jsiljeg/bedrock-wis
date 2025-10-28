@@ -1,0 +1,86 @@
+services:
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host
+    ports:
+      - 127.0.0.1:9100:9100
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host:ro
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    ports:
+      - 127.0.0.1:9115:9115
+    volumes:
+      - {{ monitoring_dir }}/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    # If you don't have a blackbox.yml yet, comment the volume and command
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    user: "root"
+    restart: unless-stopped
+    depends_on:
+      - node-exporter
+    ports:
+      - 127.0.0.1:9090:9090
+    volumes:
+      - {{ monitoring_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - {{ monitoring_dir }}/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prom-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --web.external-url={{ prom_external_url }}
+      - --web.route-prefix=/prometheus
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:9093:9093
+    env_file:
+      - {{ monitoring_dir }}/.env
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
+    volumes:
+      - {{ monitoring_dir }}/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.external-url={{ am_external_url }}
+      - --web.route-prefix=/alertmanager
+      - --config.expand-env=true
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    env_file:
+      - {{ monitoring_dir }}/.env
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "{{ grafana_root_url }}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - {{ monitoring_dir }}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ monitoring_dir }}/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  prom-data:
+  grafana-data:

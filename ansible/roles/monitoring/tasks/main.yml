@@ -1,0 +1,51 @@
+- name: Ensure monitoring dir exists
+  file:
+    path: "{{ monitoring_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template docker-compose.yml
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Ensure subdir for alertmanager config
+  file:
+    path: "{{ monitoring_dir }}/alertmanager"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template Alertmanager config
+  template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Template .env (Grafana + Slack) WITHOUT committing to git
+  template:
+    src: env.j2
+    dest: "{{ monitoring_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true  # hide secrets in logs
+
+- name: Pull images
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    pull: always
+
+- name: Up containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    state: present
+    build: false

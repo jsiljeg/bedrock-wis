@@ -1,0 +1,113 @@
+name: Deploy Monitoring (Ansible)
+
+on:
+  push:
+    branches: [ master ]
+
+  workflow_dispatch:
+    inputs:
+      run-health-checks:
+        description: "Run post-deploy health checks?"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-monitoring
+  cancel-in-progress: false
+
+jobs:
+  deploy_monitoring:
+    runs-on: ubuntu-latest
+    env:
+      # Where the monitoring stack should live on the VM
+      MON_DIR: /var/www/bedrock/shared/monitoring
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.GCE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run Ansible (inside Docker)
+        env:
+          # Pass secrets for rendering monitoring/.env on the VM
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
+          GF_ADMIN_USER:     ${{ secrets.GF_ADMIN_USER }}
+          GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
+
+          # Ansible Vault password (if you use vaulted group_vars)
+          VAULT_PASS:        ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+
+          # Optional: if your vault header uses a named vault id (e.g. ;dev / ;default)
+          # Leave blank if your header has no id.
+          VAULT_ID:          ${{ secrets.ANSIBLE_VAULT_ID }}
+        run: |
+          # Build the inner script that the container will execute
+          cat > run.sh <<'BASH'
+          set -euo pipefail
+
+          apk add --no-cache openssh-client git >/dev/null
+
+          # SSH prep for Ansible
+          cp /root/.ssh/id_rsa /tmp/id_rsa && chmod 600 /tmp/id_rsa
+          mkdir -p /root/.ssh && ssh-keyscan -H "${GCE_HOST}" >> /root/.ssh/known_hosts || true
+
+          export ANSIBLE_PRIVATE_KEY_FILE=/tmp/id_rsa
+          export ANSIBLE_HOST_KEY_CHECKING=False
+
+          # Pick the right --vault-id form based on whether a vault id name is provided
+          VAULT_FLAG=""
+          if [ -n "${VAULT_PASS:-}" ]; then
+            if [ -n "${VAULT_ID:-}" ]; then
+              VAULT_FLAG="--vault-id ${VAULT_ID}@env:VAULT_PASS"
+            else
+              VAULT_FLAG="--vault-id @env:VAULT_PASS"
+            fi
+          fi
+
+          # Optional collection (safe if already present)
+          ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
+
+          # Run the playbook (your inventory.ini points to the host; extra-vars are kept for convenience)
+          ansible-playbook -i inventory.ini monitoring.yml \
+            ${VAULT_FLAG} \
+            --extra-vars "target_host=${GCE_HOST} target_user=${GCE_USER} deploy_path=${DEPLOY_PATH}"
+          BASH
+
+          chmod +x run.sh
+
+          # Execute Ansible inside container
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$HOME/.ssh/id_rsa:/root/.ssh/id_rsa:ro" \
+            -w /workspace/ansible \
+            -e GCE_HOST="${{ secrets.GCE_HOST }}" \
+            -e GCE_USER="${{ secrets.GCE_USER }}" \
+            -e DEPLOY_PATH="${{ secrets.GCE_DEPLOY_PATH }}" \
+            -e SLACK_WEBHOOK_URL \
+            -e SLACK_CHANNEL \
+            -e GF_ADMIN_USER \
+            -e GF_ADMIN_PASSWORD \
+            -e VAULT_PASS \
+            -e VAULT_ID \
+            alpine/ansible sh -lc "./run.sh"
+
+      - name: Post-deploy health checks (via SSH)
+        if: inputs.run-health-checks == true
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se <<'EOS'
+          set -euo pipefail
+          # Adjust these if you changed Prometheus/Alertmanager route prefixes
+          curl -fsS http://127.0.0.1:9090/prometheus/-/ready
+          curl -fsS http://127.0.0.1:9093/alertmanager/-/ready
+          curl -fsS http://127.0.0.1:3000/api/health
+          docker compose -f /var/www/bedrock/shared/monitoring/docker-compose.yml ps
+          EOS

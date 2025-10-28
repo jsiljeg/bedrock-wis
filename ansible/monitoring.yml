@@ -1,46 +1,20 @@
-- hosts: all
-  gather_facts: false
-
-  vars_files:
-    - group_vars/all/vault.yml
-
+- name: Deploy/Update Monitoring Stack
+  hosts: bedrock
+  become: true
   vars:
-    target_host: "{{ target_host | default('127.0.0.1') }}"
-    target_user: "{{ target_user | default('root') }}"
-    deploy_path: "{{ deploy_path | default('/opt/bedrock') }}"
+    # Where your monitoring stack should live on the VM
+    monitoring_dir: /var/www/bedrock/shared/monitoring
+    # Reverse-proxy base URL (HTTP now; HTTPS later)
+    public_host: "34.88.159.90"
+    grafana_root_url: "http://{{ public_host }}/grafana"
+    prom_external_url: "http://{{ public_host }}/prometheus"
+    am_external_url: "http://{{ public_host }}/alertmanager"
+
+    # Provide these via --extra-vars or vault
+    slack_webhook_url: "{{ lookup('env','SLACK_WEBHOOK_URL') | default(omit) }}"
+    slack_channel: "{{ lookup('env','SLACK_CHANNEL') | default('all-testing-purposes') }}"
+    grafana_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin') }}"
+    grafana_admin_password: "{{ lookup('env','GF_ADMIN_PASSWORD') | default(omit) }}"
 
   roles:
-    - role: docker
-    - role: monitoring_stack
-
-  tasks:
-    - name: Post synthetic Slack smoke alert to local Alertmanager
-      tags: [ "smoke" ]
-      become: false
-      shell: |
-        set -euo pipefail
-        now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-        end=$(date -u -d "+5 minutes" +"%Y-%m-%dT%H:%M:%SZ")
-        cat >/tmp/smoke-alert.json <<JSON
-        [
-          {
-            "labels": {
-              "alertname": "SlackIntegrationTest",
-              "severity": "info",
-              "env": "{{ alert_env | default('development') }}"
-            },
-            "annotations": {
-              "summary": "Synthetic Slack test alert",
-              "description": "Triggered by Terraform/Ansible smoke tag"
-            },
-            "startsAt": "$now",
-            "endsAt": "$end",
-            "generatorURL": "ansible"
-          }
-        ]
-        JSON
-        curl -sS -H 'Content-Type: application/json' \
-             --data @/tmp/smoke-alert.json \
-             http://127.0.0.1:9093/api/v2/alerts
-      args:
-        executable: /bin/bash
+    - monitoring
