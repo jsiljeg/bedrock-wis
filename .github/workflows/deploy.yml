@@ -374,6 +374,60 @@ jobs:
           wp --path=web/wp acorn view:clear || true
           EOS
 
+  monitoring_deploy:
+    name: Deploy Monitoring Stack
+    runs-on: ubuntu-latest
+    needs: [ deploy ]   # run after app deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ship monitoring directory
+        uses: easingthemes/ssh-deploy@v5
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.GCE_SSH_KEY }}
+          ARGS: "-rlgoDzvc -i"
+          SOURCE: "monitoring/"
+          REMOTE_HOST: ${{ secrets.GCE_HOST }}
+          REMOTE_USER: ${{ secrets.GCE_USER }}
+          TARGET: ${{ secrets.GCE_DEPLOY_PATH }}/monitoring
+
+      - name: Render env & configs and (re)start compose
+        shell: bash
+        env:
+          GF_ADMIN_USER: ${{ secrets.GF_ADMIN_USER }}
+          GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+          ALERT_SLACK_WEBHOOK: ${{ secrets.ALERT_SLACK_WEBHOOK }}
+          ALERT_SLACK_CHANNEL: ${{ secrets.ALERT_SLACK_CHANNEL }}
+          ALERT_ENV: ${{ secrets.ALERT_ENV }}
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se <<'EOS'
+          set -euxo pipefail
+          cd "${{ secrets.GCE_DEPLOY_PATH }}/monitoring"
+
+          # 1) Render Grafana env
+          cp .env.template .env
+          sed -i \
+            -e "s#__GF_ADMIN_USER__#${GF_ADMIN_USER}#g" \
+            -e "s#__GF_ADMIN_PASSWORD__#${GF_ADMIN_PASSWORD}#g" \
+            .env
+
+          # 2) Inject Bedrock health URL in Prometheus
+          sed -i \
+            -e "s#__HEALTHCHECK_URL__#${HEALTHCHECK_URL}#g" \
+            prometheus/prometheus.yml
+
+          # 3) Inject Slack + env in Alertmanager
+          sed -i \
+            -e "s#__SLACK_WEBHOOK__#${ALERT_SLACK_WEBHOOK}#g" \
+            -e "s#__SLACK_CHANNEL__#${ALERT_SLACK_CHANNEL}#g" \
+            -e "s#__ALERT_ENV__#${ALERT_ENV}#g" \
+            alertmanager/alertmanager.yml
+
+          # 4) Start/Restart stack
+          docker compose pull
+          docker compose up -d
+          EOS
 
   health_check:
     name: Health Check
