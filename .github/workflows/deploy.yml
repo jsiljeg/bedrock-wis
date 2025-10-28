@@ -38,6 +38,21 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
 
+      - name: Compute weekly cache stamp
+        id: week
+        shell: bash
+        run: echo "stamp=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer (root, weekly-rotating)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}-${{ steps.week.outputs.stamp }}
+          restore-keys: |
+            composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles('composer.lock') }}-
+            composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
+            composer-${{ runner.os }}-
+
       - name: Install Composer deps (no dev)
         run: composer install --no-interaction --no-progress --prefer-dist --no-dev
 
@@ -70,12 +85,19 @@ jobs:
           php-version: '8.2'
           tools: composer
 
-      - name: Cache Composer (theme)
+      - name: Compute weekly cache stamp
+        id: week
+        shell: bash
+        run: echo "stamp=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer (theme, weekly-rotating)
         uses: actions/cache@v4
         with:
           path: ~/.cache/composer
-          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}
+          key: composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}-${{ steps.week.outputs.stamp }}
           restore-keys: |
+            composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}-
+            composer-${{ runner.os }}-php${{ env.PHP_VERSION }}-
             composer-${{ runner.os }}-
 
       - name: Composer install (no-dev) in theme
@@ -84,13 +106,22 @@ jobs:
           set -euxo pipefail
           composer --working-dir="${THEME_DIR}" install --no-interaction --no-dev --prefer-dist
 
-      # Node + Yarn with built-in cache
-      - name: Setup Node (Yarn cache)
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: yarn
-          cache-dependency-path: ${{ env.THEME_DIR }}/yarn.lock
+
+      - name: Cache Yarn (global) + node_modules (weekly-rotating)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/yarn
+            ${{ env.THEME_DIR }}/node_modules
+          key: yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}-${{ steps.week.outputs.stamp }}
+          restore-keys: |
+            yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}-
+            yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
+            yarn-${{ runner.os }}-
 
       - name: Build theme (Bud)
         shell: bash
@@ -126,10 +157,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute weekly cache stamp
+        id: week
+        shell: bash
+        run: echo "stamp=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Prep plugins dir
         run: |
           mkdir -p "${{ env.PLUGINS_DIR }}"
           echo "${{ env.BUILD_PLUGINS }}" > plugins.txt
+
+      - name: Cache plugin deps and build outputs (weekly-rotating)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/composer
+            ~/.cache/yarn
+            ${{ env.PLUGINS_DIR }}/**/vendor
+            ${{ env.PLUGINS_DIR }}/**/node_modules
+          key: plugins-${{ runner.os }}-php${{ env.PHP_VERSION }}-node${{ env.NODE_VERSION }}-${{ hashFiles('web/app/plugins/**/composer.lock', 'web/app/plugins/**/yarn.lock', 'web/app/plugins/**/package-lock.json') }}-${{ steps.week.outputs.stamp }}
+          restore-keys: |
+            plugins-${{ runner.os }}-php${{ env.PHP_VERSION }}-node${{ env.NODE_VERSION }}-${{ hashFiles('web/app/plugins/**/composer.lock', 'web/app/plugins/**/yarn.lock', 'web/app/plugins/**/package-lock.json') }}-
+            plugins-${{ runner.os }}-php${{ env.PHP_VERSION }}-node${{ env.NODE_VERSION }}-
+            plugins-${{ runner.os }}-
 
       - name: Fetch plugins
         run: |
