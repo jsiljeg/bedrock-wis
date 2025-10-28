@@ -10,7 +10,6 @@ route:
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 12h
-
   routes:
     - matchers:
         - severity="critical"
@@ -33,6 +32,7 @@ receivers:
     slack_configs:
       - api_url: "{{ lookup('env','SLACK_WEBHOOK_URL') }}"
         {% set ccrit = lookup('env','SLACK_CHANNEL_CRITICAL') | default('', true) %}
+        {% set ch = lookup('env','SLACK_CHANNEL') | default('', true) %}
         {% if ccrit %}
         channel: "{{ ccrit if ccrit.startswith('#') else '#' ~ ccrit }}"
         {% elif ch %}
