@@ -37,6 +37,28 @@ jobs:
             monitoring/ \
             "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}:${{ secrets.GCE_DEPLOY_PATH }}/monitoring/"
 
+      # Install Docker CE + Compose plugin if missing (Debian 12/Bookworm)
+      - name: Ensure Docker is installed on VM
+        run: |
+          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
+          set -euxo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            # Prereqs
+            sudo apt-get update -y
+            sudo apt-get install -y ca-certificates curl gnupg
+            sudo install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            sudo chmod a+r /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+            $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            sudo apt-get update -y
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            sudo systemctl enable --now docker
+          fi
+          docker --version || true
+          docker compose version || true
+          EOS
+
       - name: Render config & (re)start monitoring
         run: |
           ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
@@ -50,8 +72,8 @@ jobs:
              bash -se" <<'EOS'
           set -euxo pipefail
 
-          # Ensure target exists even if rsync skipped creation
-          mkdir -p "${GCE_DEPLOY_PATH}/monitoring"
+          # Ensure target exists, then move into it
+          sudo mkdir -p "${GCE_DEPLOY_PATH}/monitoring"
           cd "${GCE_DEPLOY_PATH}/monitoring"
 
           # 1) Render Grafana env
@@ -73,9 +95,9 @@ jobs:
             -e "s#__ALERT_ENV__#${ALERT_ENV}#g" \
             alertmanager/alertmanager.yml
 
-          # 4) Start/Restart stack (sudo fallback if required)
-          (docker compose pull || sudo docker compose pull)
-          (docker compose up -d || sudo docker compose up -d)
+          # 4) Start/Restart stack (use sudo in case runner user isn't in 'docker' group)
+          sudo docker compose pull
+          sudo docker compose up -d
           EOS
 
       - name: Send synthetic alert to Alertmanager (Slack smoke)
