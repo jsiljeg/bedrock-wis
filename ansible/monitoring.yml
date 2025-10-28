@@ -4,7 +4,9 @@
   become: true
   collections:
     - community.docker
+
   vars:
+    # Paths & creds (passed via GH Actions env, with safe defaults for local runs)
     deploy_path: "{{ lookup('env','DEPLOY_PATH') | default('/var/www/bedrock/shared/monitoring', true) }}"
     gf_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin', true) }}"
     gf_admin_password: "{{ lookup('env','GF_ADMIN_PASSWORD') | default('admin', true) }}"
@@ -22,7 +24,7 @@
           - lsb-release
         state: present
 
-    - name: Install Docker engine + compose plugin (Debian 12 friendly quick path)
+    - name: Install Docker engine + compose plugin (Debian/Ubuntu)
       apt:
         name:
           - docker.io
@@ -62,11 +64,26 @@
               static_configs:
                 - targets: ['prometheus:9090']
 
-    - name: Drop Alertmanager config
+    - name: Drop Alertmanager config (Slack optional)
       copy:
         dest: "{{ deploy_path }}/alertmanager/alertmanager.yml"
         mode: "0644"
-        content: |
+        content: |-
+          {% if slack_webhook_url %}
+          route:
+            receiver: 'slack'
+            group_by: ['alertname']
+            group_wait: 10s
+            group_interval: 10m
+            repeat_interval: 12h
+
+          receivers:
+            - name: 'slack'
+              slack_configs:
+                - send_resolved: true
+                  api_url: "{{ slack_webhook_url }}"
+                  {% if slack_channel %}channel: "{{ slack_channel }}"{% endif %}
+          {% else %}
           route:
             receiver: 'null'
             group_by: ['alertname']
@@ -76,16 +93,9 @@
 
           receivers:
             - name: 'null'
-          {{ '' if slack_webhook_url == '' else (
-              'receivers:\n' ~
-              '  - name: "slack"\n' ~
-              '    slack_configs:\n' ~
-              '      - send_resolved: true\n' ~
-              '        api_url: "' ~ slack_webhook_url ~ '"\n' ~
-              (('        channel: "' ~ slack_channel ~ '"\n') if slack_channel else '')
-          ) }}
+          {% endif %}
 
-    - name: Drop docker-compose.yml
+    - name: Drop docker-compose.yml (no fixed container_name)
       copy:
         dest: "{{ deploy_path }}/docker-compose.yml"
         mode: "0644"
@@ -93,7 +103,6 @@
           services:
             prometheus:
               image: prom/prometheus:latest
-              container_name: prometheus
               volumes:
                 - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
               ports:
@@ -105,7 +114,6 @@
 
             alertmanager:
               image: prom/alertmanager:latest
-              container_name: alertmanager
               volumes:
                 - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
               ports:
@@ -119,7 +127,6 @@
 
             grafana:
               image: grafana/grafana:latest
-              container_name: grafana
               user: "0:0"
               environment:
                 - GF_SECURITY_ADMIN_USER={{ gf_admin_user }}
@@ -139,29 +146,56 @@
               name: monitoring_net
               driver: bridge
 
+    # --- One-time cleanup for legacy fixed container names & network ---
+
+    - name: Remove legacy containers with fixed names (safe if absent)
+      shell: |
+        set -e
+        for c in prometheus alertmanager grafana; do
+          if docker ps -a --format '{{"{{"}}.Names{{"}}"}}' | grep -qx "$c"; then
+            docker rm -f "$c"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Remove legacy 'monitoring_net' if it conflicts (safe if absent/unused)
+      command: docker network rm monitoring_net
+      changed_when: false
+      failed_when: false
+
+    # --- Compose v2 module run (idempotent) ---
+
     - name: Pull images and start stack
-      docker_compose_v2:
+      community.docker.docker_compose_v2:
         project_src: "{{ deploy_path }}"
+        project_name: monitoring
         state: present
         pull: always
+        recreate: smart
+        remove_orphans: true
+
+    # --- Readiness checks ---
 
     - name: Wait for Prometheus to be ready
       wait_for:
         host: 127.0.0.1
         port: 9090
         delay: 1
-        timeout: 60
+        timeout: 90
 
     - name: Wait for Alertmanager to be ready
       wait_for:
         host: 127.0.0.1
         port: 9093
         delay: 1
-        timeout: 60
+        timeout: 90
 
     - name: Wait for Grafana to be ready
       wait_for:
         host: 127.0.0.1
         port: 3000
         delay: 1
-        timeout: 60
+        timeout: 90
