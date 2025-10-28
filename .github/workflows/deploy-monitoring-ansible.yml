@@ -36,34 +36,37 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Run Ansible playbook (no-vault)
-        working-directory: ansible
+      - name: Deploy monitoring stack with Ansible (inline inventory)
         env:
-          # Target VM
           GCE_HOST:    ${{ secrets.GCE_HOST }}
           GCE_USER:    ${{ secrets.GCE_USER }}
           DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH }}
-
-          # Secrets consumed by the template
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
           GF_ADMIN_USER:     ${{ secrets.GF_ADMIN_USER }}
           GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
-          # If your play uses docker modules, uncomment this:
-          # ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
+          export ANSIBLE_HOST_KEY_CHECKING=False
+          export ANSIBLE_PRIVATE_KEY_FILE=$HOME/.ssh/id_rsa
 
-          ansible-playbook -i ansible/inventory.ini monitoring.yml
+          # Run the playbook from repo root; inventory is a literal host list (note the comma!)
+          ansible-playbook -i "${GCE_HOST}," -u "${GCE_USER}" \
+            --private-key "$ANSIBLE_PRIVATE_KEY_FILE" \
+            -e "ansible_host=${GCE_HOST}" \
+            -e "ansible_user=${GCE_USER}" \
+            ansible/monitoring.yml
 
       - name: Post-deploy health checks (via SSH)
         if: inputs.run-health-checks == true
         run: |
-          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se <<'EOS'
           set -euo pipefail
-          # Use prefixed paths if you configured Prometheus/Alertmanager with /prometheus, /alertmanager
-          curl -fsS http://127.0.0.1:9090/prometheus/-/ready || curl -fsS http://127.0.0.1:9090/-/ready
-          curl -fsS http://127.0.0.1:9093/alertmanager/-/ready || curl -fsS http://127.0.0.1:9093/-/ready
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
+            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
+          set -euo pipefail
+          # If your docker compose plugin uses /usr/bin/docker, both "docker compose" and "docker-compose" should be fine.
+          curl -fsS http://127.0.0.1:9090/-/ready
+          curl -fsS http://127.0.0.1:9093/-/ready
           curl -fsS http://127.0.0.1:3000/api/health
           docker compose -f /var/www/bedrock/shared/monitoring/docker-compose.yml ps
           EOS

@@ -1,50 +1,165 @@
 ---
 - name: Deploy/Update Monitoring Stack (no-vault)
   hosts: all
-  gather_facts: false
+  become: true
   vars:
-    deploy_path: "{{ deploy_path | default('/var/www/bedrock') }}"
-    mon_dir: "{{ deploy_path }}/shared/monitoring"
+    deploy_path: "{{ lookup('env','DEPLOY_PATH') | default('/var/www/bedrock/shared/monitoring', true) }}"
+    gf_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin', true) }}"
+    gf_admin_password: "{{ lookup('env','GF_ADMIN_PASSWORD') | default('admin', true) }}"
+    slack_webhook_url: "{{ lookup('env','SLACK_WEBHOOK_URL') | default('', true) }}"
+    slack_channel: "{{ lookup('env','SLACK_CHANNEL') | default('', true) }}"
 
   tasks:
-    - name: Ensure monitoring dir exists
-      ansible.builtin.file:
-        path: "{{ mon_dir }}"
+    - name: Ensure packages for Docker
+      apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Install Docker engine + compose plugin (Debian 12 friendly quick path)
+      apt:
+        name:
+          - docker.io
+          - docker-compose-plugin
+        state: present
+
+    - name: Enable/start Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Create monitoring directories
+      file:
+        path: "{{ item }}"
         state: directory
-        mode: "0755"
-
-    - name: Rsync monitoring/ repo content to VM (except .env)
-      ansible.builtin.synchronize:
-        src: "../monitoring/"
-        dest: "{{ mon_dir }}/"
-        rsync_opts:
-          - "--delete"
-          - "--exclude=.env"
-      delegate_to: localhost
-
-    - name: Render .env from GH env vars
-      ansible.builtin.template:
-        src: "templates/monitoring.env.j2"
-        dest: "{{ mon_dir }}/.env"
         owner: root
         group: root
-        mode: "0600"
+        mode: "0755"
+      loop:
+        - "{{ deploy_path }}"
+        - "{{ deploy_path }}/prometheus"
+        - "{{ deploy_path }}/alertmanager"
+        - "{{ deploy_path }}/grafana"
 
-    - name: Pull images
-      ansible.builtin.shell: docker compose pull
-      args:
-        chdir: "{{ mon_dir }}"
+    - name: Drop Prometheus config
+      copy:
+        dest: "{{ deploy_path }}/prometheus/prometheus.yml"
+        mode: "0644"
+        content: |
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
 
-    - name: Up stack
-      ansible.builtin.shell: docker compose up -d
-      args:
-        chdir: "{{ mon_dir }}"
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['prometheus:9090']
 
-    - name: Show status
-      ansible.builtin.shell: docker compose ps
-      args:
-        chdir: "{{ mon_dir }}"
-      register: ps_out
+    - name: Drop Alertmanager config
+      copy:
+        dest: "{{ deploy_path }}/alertmanager/alertmanager.yml"
+        mode: "0644"
+        content: |
+          route:
+            receiver: 'null'
+            group_by: ['alertname']
+            group_wait: 10s
+            group_interval: 10m
+            repeat_interval: 12h
 
-    - ansible.builtin.debug:
-        var: ps_out.stdout_lines
+          receivers:
+            - name: 'null'
+          {{ '' if slack_webhook_url == '' else (
+              'receivers:\n' ~
+              '  - name: "slack"\n' ~
+              '    slack_configs:\n' ~
+              '      - send_resolved: true\n' ~
+              '        api_url: "' ~ slack_webhook_url ~ '"\n' ~
+              (('        channel: "' ~ slack_channel ~ '"\n') if slack_channel else '')
+          ) }}
+
+    - name: Drop docker-compose.yml
+      copy:
+        dest: "{{ deploy_path }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          services:
+            prometheus:
+              image: prom/prometheus:latest
+              container_name: prometheus
+              volumes:
+                - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+              ports:
+                - "127.0.0.1:9090:9090"
+              command:
+                - --config.file=/etc/prometheus/prometheus.yml
+                - --storage.tsdb.path=/prometheus
+              restart: unless-stopped
+
+            alertmanager:
+              image: prom/alertmanager:latest
+              container_name: alertmanager
+              volumes:
+                - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+              ports:
+                - "127.0.0.1:9093:9093"
+              command:
+                - --config.file=/etc/alertmanager/alertmanager.yml
+                - --storage.path=/alertmanager
+              restart: unless-stopped
+              depends_on:
+                - prometheus
+
+            grafana:
+              image: grafana/grafana:latest
+              container_name: grafana
+              user: "0:0"
+              environment:
+                - GF_SECURITY_ADMIN_USER={{ gf_admin_user }}
+                - GF_SECURITY_ADMIN_PASSWORD={{ gf_admin_password }}
+                - GF_SERVER_HTTP_ADDR=0.0.0.0
+                - GF_SERVER_HTTP_PORT=3000
+              ports:
+                - "127.0.0.1:3000:3000"
+              volumes:
+                - ./grafana:/var/lib/grafana
+              restart: unless-stopped
+              depends_on:
+                - prometheus
+
+          networks:
+            default:
+              name: monitoring_net
+              driver: bridge
+
+    - name: Pull images and start stack
+      community.general.docker_compose_v2:
+        project_src: "{{ deploy_path }}"
+        state: present
+        pull: always
+
+    - name: Wait for Prometheus to be ready
+      wait_for:
+        host: 127.0.0.1
+        port: 9090
+        delay: 1
+        timeout: 60
+
+    - name: Wait for Alertmanager to be ready
+      wait_for:
+        host: 127.0.0.1
+        port: 9093
+        delay: 1
+        timeout: 60
+
+    - name: Wait for Grafana to be ready
+      wait_for:
+        host: 127.0.0.1
+        port: 3000
+        delay: 1
+        timeout: 60
