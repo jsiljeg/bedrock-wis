@@ -11,8 +11,6 @@ This repository uses three GitHub Actions workflows:
 3. **Monitoring smoke test (Alertmanager → Slack)** — `.github/workflows/monitoring-smoke-test.yml`  
    Sends a synthetic alert into Alertmanager to verify Slack notifications end-to-end.
 
-> Caching (Composer/Yarn) is documented in **[BUILD_CACHE_STRATEGY.md](./BUILD_CACHE_STRATEGY.md)**. The Bedrock pipeline implements weekly-rotating cache keys and restore-key fallbacks to keep builds fast yet fresh.
-
 ---
 
 ## Required GitHub Secrets
