@@ -181,16 +181,34 @@ jobs:
             plugins-${{ runner.os }}-php${{ env.PHP_VERSION }}-node${{ env.NODE_VERSION }}-
             plugins-${{ runner.os }}-
 
-      - name: Fetch plugins
+      - name: Fetch plugins (idempotent)
+        shell: bash
         run: |
           set -euo pipefail
+          PLUGDIR="${{ env.PLUGINS_DIR }}"
+          mkdir -p "$PLUGDIR"
+
+          # Normalize the list: drop blanks/comments, dedupe
+          grep -v '^\s*#' plugins.txt | sed '/^\s*$/d' | sort -u > plugins.normalized
+
           while read -r url; do
             [ -z "$url" ] && continue
-            repo=$(basename "$url")
+            repo="$(basename "$url")"
             dir="${repo%.*}"
-            git clone --depth=1 "$url" "${{ env.PLUGINS_DIR }}/${dir}"
-            rm -rf "${{ env.PLUGINS_DIR }}/${dir}/.git"
-          done < plugins.txt
+            target="${PLUGDIR}/${dir}"
+
+            # If target exists, clean it to avoid 'already exists' errors.
+            # (We could 'git fetch/reset' if it were a git clone, but we always remove .git below.)
+            if [ -e "$target" ]; then
+              rm -rf "$target"
+            fi
+
+            git clone --depth=1 "$url" "$target"
+            rm -rf "$target/.git"
+          done < plugins.normalized
+
+          echo "== Plugins on disk =="
+          ls -la "$PLUGDIR"
 
       - name: Upload plugins artifact
         uses: actions/upload-artifact@v4
