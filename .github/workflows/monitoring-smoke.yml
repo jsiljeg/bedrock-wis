@@ -40,7 +40,8 @@ jobs:
       - name: Render config & (re)start monitoring
         run: |
           ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
-            "GF_ADMIN_USER='${{ secrets.GF_ADMIN_USER }}' \
+            "GCE_DEPLOY_PATH='${{ secrets.GCE_DEPLOY_PATH }}' \
+             GF_ADMIN_USER='${{ secrets.GF_ADMIN_USER }}' \
              GF_ADMIN_PASSWORD='${{ secrets.GF_ADMIN_PASSWORD }}' \
              HEALTHCHECK_URL='${{ secrets.HEALTHCHECK_URL }}' \
              ALERT_SLACK_WEBHOOK='${{ secrets.ALERT_SLACK_WEBHOOK }}' \
@@ -48,7 +49,10 @@ jobs:
              ALERT_ENV='${{ secrets.ALERT_ENV }}' \
              bash -se" <<'EOS'
           set -euxo pipefail
-          cd "${GCE_DEPLOY_PATH:-${HOME}}/monitoring"
+
+          # Ensure target exists even if rsync skipped creation
+          mkdir -p "${GCE_DEPLOY_PATH}/monitoring"
+          cd "${GCE_DEPLOY_PATH}/monitoring"
 
           # 1) Render Grafana env
           cp .env.template .env
@@ -73,14 +77,12 @@ jobs:
           (docker compose pull || sudo docker compose pull)
           (docker compose up -d || sudo docker compose up -d)
           EOS
-        env:
-          # pass deploy path for use inside the remote shell as a safety net
-          GCE_DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH }}
 
       - name: Send synthetic alert to Alertmanager (Slack smoke)
         if: ${{ inputs.send_test_alert }}
         run: |
-          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
+          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
+            "ALERT_ENV='${{ secrets.ALERT_ENV }}' bash -se" <<'EOS'
           set -euo pipefail
           now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           end=$(date -u -d "+5 minutes" +"%Y-%m-%dT%H:%M:%SZ")
@@ -90,7 +92,7 @@ jobs:
               "labels": {
                 "alertname": "SlackIntegrationTest",
                 "severity": "info",
-                "env": "${{ secrets.ALERT_ENV }}"
+                "env": "${ALERT_ENV}"
               },
               "annotations": {
                 "summary": "Synthetic Slack test alert",
