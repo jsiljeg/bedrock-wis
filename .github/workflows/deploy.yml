@@ -110,9 +110,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: theme-build
-          path: |
-            ${{ env.THEME_DIR }}/public
-            ${{ env.THEME_DIR }}/dist
+          path: ${{ env.THEME_DIR }}
           retention-days: 3
 
   plugins_build:
@@ -276,6 +274,20 @@ jobs:
           admin-user: ${{ secrets.WP_ADMIN_USER }}
           admin-pass: ${{ secrets.WP_ADMIN_PASS }}
           admin-email: ${{ secrets.WP_ADMIN_EMAIL }}
+
+      - name: Activate Sage theme + flush rewrites
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se << 'EOS'
+          set -euo pipefail
+          cd "${{ secrets.GCE_DEPLOY_PATH }}/current"
+          if [ -d "web/app/themes/sage" ]; then
+            wp --path=web/wp theme activate sage || true
+            wp --path=web/wp option update permalink_structure '/%postname%/' || true
+            wp --path=web/wp rewrite flush --hard || true
+          fi
+          EOS
+
 
   health_check:
     name: Health Check
