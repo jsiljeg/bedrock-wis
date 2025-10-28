@@ -1,9 +1,6 @@
 name: Deploy Monitoring (no-vault, Ansible)
 
 on:
-  push:
-    branches: [ master ]
-
   workflow_dispatch:
     inputs:
       run-health-checks:
