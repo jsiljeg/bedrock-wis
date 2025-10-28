@@ -235,22 +235,33 @@ jobs:
           set -e
           [ -f web/wp/wp-settings.php ] || { echo "ERROR: web/wp missing from release"; exit 1; }
 
-      - name: Require Acorn plugin into Bedrock (no dev, permissive)
+      - name: Require Acorn (prefer v5, fallback v4.4) without dev deps
         run: |
           set -euxo pipefail
-          # allow acorn installer if present
+
+          # 1) Allow the Acorn installer if it exists
           composer config --no-interaction allow-plugins.roots/acorn-installer true || true
 
-          # Try Acorn v5 first (Sage 10 works with it). Allow full dep graph updates.
-          if ! composer require -W roots/acorn:^5.0 --no-interaction --no-progress --prefer-dist --no-dev; then
-            echo "Acorn ^5 failed; falling back to Acorn ^4 (Symfony 6 compatible)"
+          # Helper that tries a version then verifies plugin files exist
+          try_acorn() {
+            ver="$1"
+            # a) write the constraint without updating yet
+            composer require roots/acorn:"$ver" -W --no-interaction --no-progress --prefer-dist --no-update
+            # b) update only what's needed, and keep NO-DEV
+            composer update roots/acorn --with-all-dependencies --no-interaction --no-progress --prefer-dist --no-dev
+            # c) install (optimize) to be extra sure vendor matches lock (no dev)
+            composer install --no-interaction --no-progress --prefer-dist --no-dev -o
+            # d) verify plugin landed in Bedrock plugins dir
+            test -f web/app/plugins/acorn/acorn.php
+          }
+
+          # Try Acorn 5 first (works with Sage 10 too); fallback to 4.4 if constraints resist
+          if ! try_acorn '^5.0'; then
+            echo 'Acorn ^5 failed; falling back to ^4.4 (Symfony 6 compatible)'
+            # remove the constraint we just added (if any) then try ^4.4
             composer remove roots/acorn --no-interaction || true
-            composer require -W roots/acorn:^4.4 --no-interaction --no-progress --prefer-dist --no-dev
+            try_acorn '^4.4'
           fi
-
-          # Must exist after require:
-          test -f web/app/plugins/acorn/acorn.php
-
 
       - name: Bundle release tarball
         id: bundle
@@ -329,18 +340,16 @@ jobs:
           fi
           EOS
 
-      - name: Activate Acorn plugin
+      - name: Activate Acorn + clear caches
         shell: bash
         run: |
           ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se << 'EOS'
           set -euo pipefail
           cd "${{ secrets.GCE_DEPLOY_PATH }}/current"
-          test -f web/app/plugins/acorn/acorn.php
           wp --path=web/wp plugin activate acorn || true
           wp --path=web/wp acorn optimize:clear || true
           wp --path=web/wp acorn view:clear || true
           EOS
-
 
   health_check:
     name: Health Check
