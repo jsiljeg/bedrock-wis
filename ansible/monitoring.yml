@@ -1,20 +1,50 @@
-- name: Deploy/Update Monitoring Stack
-  hosts: bedrock
-  become: true
+---
+- name: Deploy/Update Monitoring Stack (no-vault)
+  hosts: all
+  gather_facts: false
   vars:
-    # Where your monitoring stack should live on the VM
-    monitoring_dir: /var/www/bedrock/shared/monitoring
-    # Reverse-proxy base URL (HTTP now; HTTPS later)
-    public_host: "34.88.159.90"
-    grafana_root_url: "http://{{ public_host }}/grafana"
-    prom_external_url: "http://{{ public_host }}/prometheus"
-    am_external_url: "http://{{ public_host }}/alertmanager"
+    deploy_path: "{{ deploy_path | default('/var/www/bedrock') }}"
+    mon_dir: "{{ deploy_path }}/shared/monitoring"
 
-    # Provide these via --extra-vars or vault
-    slack_webhook_url: "{{ lookup('env','SLACK_WEBHOOK_URL') | default(omit) }}"
-    slack_channel: "{{ lookup('env','SLACK_CHANNEL') | default('all-testing-purposes') }}"
-    grafana_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin') }}"
-    grafana_admin_password: "{{ lookup('env','GF_ADMIN_PASSWORD') | default(omit) }}"
+  tasks:
+    - name: Ensure monitoring dir exists
+      ansible.builtin.file:
+        path: "{{ mon_dir }}"
+        state: directory
+        mode: "0755"
 
-  roles:
-    - monitoring
+    - name: Rsync monitoring/ repo content to VM (except .env)
+      ansible.builtin.synchronize:
+        src: "../monitoring/"
+        dest: "{{ mon_dir }}/"
+        rsync_opts:
+          - "--delete"
+          - "--exclude=.env"
+      delegate_to: localhost
+
+    - name: Render .env from GH env vars
+      ansible.builtin.template:
+        src: "templates/monitoring.env.j2"
+        dest: "{{ mon_dir }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Pull images
+      ansible.builtin.shell: docker compose pull
+      args:
+        chdir: "{{ mon_dir }}"
+
+    - name: Up stack
+      ansible.builtin.shell: docker compose up -d
+      args:
+        chdir: "{{ mon_dir }}"
+
+    - name: Show status
+      ansible.builtin.shell: docker compose ps
+      args:
+        chdir: "{{ mon_dir }}"
+      register: ps_out
+
+    - ansible.builtin.debug:
+        var: ps_out.stdout_lines

@@ -1,9 +1,6 @@
-name: Deploy Monitoring (Ansible on runner)
+name: Deploy Monitoring (no-vault, Ansible)
 
 on:
-  push:
-    branches: [ master ]
-
   workflow_dispatch:
     inputs:
       run-health-checks:
@@ -21,10 +18,8 @@ concurrency:
 jobs:
   deploy_monitoring:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python & Ansible
         uses: actions/setup-python@v5
@@ -41,75 +36,35 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Run Ansible playbook (vault auto-detect)
+      - name: Run Ansible playbook (no-vault)
         working-directory: ansible
         env:
-          GCE_HOST: ${{ secrets.GCE_HOST }}
-          GCE_USER: ${{ secrets.GCE_USER }}
+          # Target VM
+          GCE_HOST:    ${{ secrets.GCE_HOST }}
+          GCE_USER:    ${{ secrets.GCE_USER }}
           DEPLOY_PATH: ${{ secrets.GCE_DEPLOY_PATH }}
 
+          # Secrets consumed by the template
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
-          GF_ADMIN_USER: ${{ secrets.GF_ADMIN_USER }}
+          SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
+          GF_ADMIN_USER:     ${{ secrets.GF_ADMIN_USER }}
           GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
-
-          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}  # REQUIRED
         run: |
           set -euo pipefail
+          # If your play uses docker modules, uncomment this:
+          # ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
 
-          # If your role uses community.docker modules, install the collection (safe if re-run)
-          ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
-
-          # 1) Write vault password to a local file (no newline issues)
-          printf '%s' "$ANSIBLE_VAULT_PASSWORD" > .vault
-          chmod 600 .vault
-
-          # 2) Detect vault header & optional ID
-          HEADER="$(head -n1 group_vars/all/vault.yml || true)"
-          echo "Vault header: $HEADER"
-          # Header looks like: $ANSIBLE_VAULT;1.1;AES256[;optional-id]
-          VAULT_ID=""
-          if [[ "$HEADER" =~ ^\\$ANSIBLE_VAULT;[0-9.]+;AES256;([^;[:space:]]+)$ ]]; then
-            VAULT_ID="${BASH_REMATCH[1]}"
-            echo "Detected vault id: $VAULT_ID"
-          else
-            echo "No explicit vault id in header."
-          fi
-
-          # 3) Build flags and sanity-check decryption
-          # Try the most compatible first: --vault-password-file
-          VAULT_FLAG="--vault-password-file .vault"
-          if ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null 2>&1; then
-            echo "Decryption ok with password-file."
-          else
-            # If header had an id, try that form; else try '@.vault' form
-            if [ -n "$VAULT_ID" ]; then
-              VAULT_FLAG="--vault-id ${VAULT_ID}@.vault"
-              echo "Retrying decryption with named id: $VAULT_FLAG"
-              ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null \
-                || { echo "::error::Vault password does not match the named id '$VAULT_ID'"; exit 1; }
-            else
-              VAULT_FLAG="--vault-id @.vault"
-              echo "Retrying decryption with env-style id: $VAULT_FLAG"
-              ansible-vault view group_vars/all/vault.yml $VAULT_FLAG >/dev/null \
-                || { echo "::error::Vault password incorrect (no id). Check ANSIBLE_VAULT_PASSWORD."; exit 1; }
-            fi
-          fi
-
-          # 4) Run playbook
           ansible-playbook -i inventory.ini monitoring.yml \
-            $VAULT_FLAG \
             --extra-vars "target_host=${GCE_HOST} target_user=${GCE_USER} deploy_path=${DEPLOY_PATH}"
-
 
       - name: Post-deploy health checks (via SSH)
         if: inputs.run-health-checks == true
         run: |
           ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se <<'EOS'
           set -euo pipefail
-          # Adjust if you removed Prometheus/Alertmanager prefixes
-          curl -fsS http://127.0.0.1:9090/prometheus/-/ready
-          curl -fsS http://127.0.0.1:9093/alertmanager/-/ready
+          # Use prefixed paths if you configured Prometheus/Alertmanager with /prometheus, /alertmanager
+          curl -fsS http://127.0.0.1:9090/prometheus/-/ready || curl -fsS http://127.0.0.1:9090/-/ready
+          curl -fsS http://127.0.0.1:9093/alertmanager/-/ready || curl -fsS http://127.0.0.1:9093/-/ready
           curl -fsS http://127.0.0.1:3000/api/health
           docker compose -f /var/www/bedrock/shared/monitoring/docker-compose.yml ps
           EOS
