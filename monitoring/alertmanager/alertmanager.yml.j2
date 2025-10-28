@@ -21,7 +21,10 @@ receivers:
   - name: slack_default
     slack_configs:
       - api_url: "{{ lookup('env','SLACK_WEBHOOK_URL') }}"
-        channel: "{{ lookup('env','SLACK_CHANNEL') | default('#alerts', true) }}"
+        {% set ch = lookup('env','SLACK_CHANNEL') | default('', true) %}
+        {% if ch %}
+        channel: "{{ ch if ch.startswith('#') else '#' ~ ch }}"
+        {% endif %}
         send_resolved: true
         {% raw %}title: '{{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'{% endraw %}
@@ -29,7 +32,12 @@ receivers:
   - name: slack_critical
     slack_configs:
       - api_url: "{{ lookup('env','SLACK_WEBHOOK_URL') }}"
-        channel: "{{ lookup('env','SLACK_CHANNEL_CRITICAL') | default(lookup('env','SLACK_CHANNEL') | default('#alerts', true), true) }}"
+        {% set ccrit = lookup('env','SLACK_CHANNEL_CRITICAL') | default('', true) %}
+        {% if ccrit %}
+        channel: "{{ ccrit if ccrit.startswith('#') else '#' ~ ccrit }}"
+        {% elif ch %}
+        channel: "{{ ch if ch.startswith('#') else '#' ~ ch }}"
+        {% endif %}
         send_resolved: true
         {% raw %}title: '{{ template "slack.title" . }}'
         text: '{{ template "slack.text" . }}'{% endraw %}
