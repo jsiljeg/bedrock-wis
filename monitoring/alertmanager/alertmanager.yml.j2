@@ -1,0 +1,25 @@
+{% if slack_webhook_url %}
+route:
+  receiver: 'slack'
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10m
+  repeat_interval: 12h
+
+receivers:
+  - name: 'slack'
+    slack_configs:
+      - send_resolved: true
+        api_url: "{{ slack_webhook_url }}"
+        {% if slack_channel %}channel: "{{ slack_channel }}"{% endif %}
+{% else %}
+route:
+  receiver: 'null'
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10m
+  repeat_interval: 12h
+
+receivers:
+  - name: 'null'
+{% endif %}

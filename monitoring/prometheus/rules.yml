@@ -1,42 +1,22 @@
 groups:
-  - name: test.slack
+  - name: probe-alerts
     rules:
-      - alert: SlackIntegrationTest
-        expr: vector(1)
-        for: 1m
-        labels:
-          severity: info
-        annotations:
-          summary: "Slack test alert"
-          description: "If you see this in Slack (#${ALERT_SLACK_CHANNEL}), Alertmanager is wired correctly."
-
-  - name: host.rules
-    rules:
-      - alert: HostHighCpu
-        expr: avg by (instance) (rate(node_cpu_seconds_total{mode!="idle"}[5m])) > 0.8
-        for: 5m
+      - alert: BedrockHttpDown
+        expr: probe_success{job="blackbox_http"} == 0
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "High CPU on {{ $labels.instance }}"
-          description: "CPU usage > 80% for 5m"
+          summary: "HTTP probe failed for {{ $labels.instance }}"
+          description: "Blackbox probe to {{ $labels.instance }} is failing."
 
-      - alert: HostLowMemory
+  - name: node-health
+    rules:
+      - alert: HighNodeMemoryUsage
         expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.15
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Low memory on {{ $labels.instance }}"
-          description: "Available RAM < 15% for 5m"
-
-  - name: uptime.rules
-    rules:
-      - alert: BedrockDown
-        expr: probe_success{job="blackbox_http_bedrock"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Bedrock HTTP probe failing"
-          description: "Blackbox probe to Bedrock URL is failing"
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Available memory < 15% for 5m."

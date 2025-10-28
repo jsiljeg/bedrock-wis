@@ -35,11 +35,11 @@ services:
     ports:
       - 127.0.0.1:9090:9090
     volumes:
-      - {{ monitoring_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - {{ monitoring_dir }}/prometheus/prometheus.yml.j2:/etc/prometheus/prometheus.yml.j2:ro
       - {{ monitoring_dir }}/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prom-data:/prometheus
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
+      - --config.file=/etc/prometheus/prometheus.yml.j2
       - --web.enable-remote-write-receiver
       - --web.external-url={{ prom_external_url }}
       - --web.route-prefix=/prometheus
@@ -56,9 +56,9 @@ services:
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - SLACK_CHANNEL=${SLACK_CHANNEL}
     volumes:
-      - {{ monitoring_dir }}/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - {{ monitoring_dir }}/alertmanager/alertmanager.yml.j2:/etc/alertmanager/alertmanager.yml.j2:ro
     command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --config.file=/etc/alertmanager/alertmanager.yml.j2
       - --web.external-url={{ am_external_url }}
       - --web.route-prefix=/alertmanager
       - --config.expand-env=true

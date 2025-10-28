@@ -1,0 +1,58 @@
+name: Alertmanager Slack Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: "Severity label"
+        type: choice
+        default: warning
+        options: [info, warning, critical]
+      instance:
+        description: "Instance label for test"
+        type: string
+        default: "smoke-test"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.GCE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Send synthetic alert to Alertmanager
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
+            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
+          set -euo pipefail
+          cat >/tmp/test-alert.json <<JSON
+          [
+            {
+              "labels": {
+                "alertname": "SlackSmokeTest",
+                "severity": "${{ inputs.severity }}",
+                "instance": "${{ inputs.instance }}"
+              },
+              "annotations": {
+                "summary": "Synthetic test alert from GitHub Actions",
+                "description": "If you see this in Slack, Alertmanager -> Slack path works."
+              },
+              "startsAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }
+          ]
+          JSON
+
+          # Send alert to local Alertmanager
+          curl -fsS -XPOST -H "Content-Type: application/json" \
+            --data @/tmp/test-alert.json \
+            http://127.0.0.1:9093/api/v2/alerts
+
+          echo "Sent test alert. Check your Slack channel."
+          EOS

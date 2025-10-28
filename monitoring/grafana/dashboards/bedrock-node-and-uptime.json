@@ -1,57 +1,47 @@
 {
-  "title": "Bedrock – Node & Uptime",
+  "id": null,
   "uid": "bedrock-node-uptime",
+  "title": "Bedrock Node & Uptime",
+  "timezone": "browser",
   "schemaVersion": 38,
   "version": 1,
-  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "10s",
   "panels": [
     {
-      "type": "timeseries",
-      "title": "CPU usage (5m avg)",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "type": "stat",
+      "title": "HTTP Probe Success",
+      "id": 1,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "expr": "avg by(instance) (rate(node_cpu_seconds_total{mode!='idle'}[5m])) * 100",
-          "legendFormat": "{{instance}}"
-        }
+        {"expr": "max(probe_success{job=\"blackbox_http\"})", "refId": "A"}
       ],
-      "fieldConfig": { "defaults": { "unit": "percent" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "Memory available %",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
-      "targets": [
-        {
-          "expr": "(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-          "legendFormat": "{{instance}}"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "percent" } }
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto"}
     },
     {
       "type": "stat",
-      "title": "Bedrock HTTP availability",
-      "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+      "title": "CPU Usage %",
+      "id": 2,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        { "expr": "avg by(instance) (probe_success{job='blackbox_http_bedrock'})" }
-      ],
-      "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
-        "orientation": "horizontal"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": 0 },
-              { "color": "green", "value": 1 }
-            ]
-          }
+        {
+          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "refId": "A"
         }
-      }
+      ],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto"}
+    },
+    {
+      "type": "stat",
+      "title": "Memory Used %",
+      "id": 3,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "refId": "A"
+        }
+      ],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto"}
     }
   ]
 }

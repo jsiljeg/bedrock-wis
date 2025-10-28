@@ -1,17 +1,17 @@
 ---
-- name: Deploy/Update Monitoring Stack (no-vault)
+- name: Deploy/Update Monitoring Stack (repo-driven)
   hosts: all
   become: true
   collections:
     - community.docker
 
   vars:
-    # Paths & creds (passed via GH Actions env, with safe defaults for local runs)
     deploy_path: "{{ lookup('env','DEPLOY_PATH') | default('/var/www/bedrock/shared/monitoring', true) }}"
     gf_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin', true) }}"
     gf_admin_password: "{{ lookup('env','GF_ADMIN_PASSWORD') | default('admin', true) }}"
     slack_webhook_url: "{{ lookup('env','SLACK_WEBHOOK_URL') | default('', true) }}"
     slack_channel: "{{ lookup('env','SLACK_CHANNEL') | default('', true) }}"
+    repo_monitoring_src: "{{ playbook_dir }}/../monitoring"   # repo-local folder
 
   tasks:
     - name: Ensure packages for Docker
@@ -37,116 +37,70 @@
         enabled: true
         state: started
 
-    - name: Create monitoring directories
+    - name: Create target directory
       file:
-        path: "{{ item }}"
+        path: "{{ deploy_path }}"
         state: directory
         owner: root
         group: root
         mode: "0755"
-      loop:
-        - "{{ deploy_path }}"
-        - "{{ deploy_path }}/prometheus"
-        - "{{ deploy_path }}/alertmanager"
-        - "{{ deploy_path }}/grafana"
 
-    - name: Drop Prometheus config
+    # --- Push repo/monitoring contents verbatim ---
+
+    - name: Copy monitoring tree from repo to VM
       copy:
+        src: "{{ repo_monitoring_src }}/"
+        dest: "{{ deploy_path }}/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+
+    - name: Render Prometheus config from template if present
+      when: lookup('ansible.builtin.fileglob', repo_monitoring_src + '/prometheus/prometheus.yml.j2', errors='ignore') != ''
+      template:
+        src: "{{ repo_monitoring_src }}/prometheus/prometheus.yml.j2"
         dest: "{{ deploy_path }}/prometheus/prometheus.yml"
         mode: "0644"
-        content: |
-          global:
-            scrape_interval: 15s
-            evaluation_interval: 15s
+      vars:
+        bedrock_health_url: "{{ lookup('env','HEALTHCHECK_URL') | default('http://127.0.0.1', true) }}"
+      notify: Restart stack
 
-          scrape_configs:
-            - job_name: 'prometheus'
-              static_configs:
-                - targets: ['prometheus:9090']
-
-    - name: Drop Alertmanager config (Slack optional)
-      copy:
+    - name: Render Alertmanager config from template if present
+      when: lookup('ansible.builtin.fileglob', repo_monitoring_src + '/alertmanager/alertmanager.yml.j2', errors='ignore') != ''
+      template:
+        src: "{{ repo_monitoring_src }}/alertmanager/alertmanager.yml.j2"
         dest: "{{ deploy_path }}/alertmanager/alertmanager.yml"
         mode: "0644"
-        content: |-
-          {% if slack_webhook_url %}
-          route:
-            receiver: 'slack'
-            group_by: ['alertname']
-            group_wait: 10s
-            group_interval: 10m
-            repeat_interval: 12h
+      vars:
+        slack_webhook_url: "{{ lookup('env','SLACK_WEBHOOK_URL') | default('', true) }}"
+        slack_channel: "{{ lookup('env','SLACK_CHANNEL') | default('', true) }}"
+      notify: Restart stack
 
-          receivers:
-            - name: 'slack'
-              slack_configs:
-                - send_resolved: true
-                  api_url: "{{ slack_webhook_url }}"
-                  {% if slack_channel %}channel: "{{ slack_channel }}"{% endif %}
-          {% else %}
-          route:
-            receiver: 'null'
-            group_by: ['alertname']
-            group_wait: 10s
-            group_interval: 10m
-            repeat_interval: 12h
 
-          receivers:
-            - name: 'null'
-          {% endif %}
+    # Optional: render .env from template if present
+    - name: Render .env from .env.template (if exists)
+      when: lookup('ansible.builtin.fileglob', repo_monitoring_src + '/.env.template', errors='ignore') != ''
+      template:
+        src: "{{ repo_monitoring_src }}/.env.template"
+        dest: "{{ deploy_path }}/.env"
+        mode: "0640"
+      vars:
+        GF_ADMIN_USER: "{{ gf_admin_user }}"
+        GF_ADMIN_PASSWORD: "{{ gf_admin_password }}"
+        SLACK_WEBHOOK_URL: "{{ slack_webhook_url }}"
+        SLACK_CHANNEL: "{{ slack_channel }}"
 
-    - name: Drop docker-compose.yml (no fixed container_name)
-      copy:
-        dest: "{{ deploy_path }}/docker-compose.yml"
-        mode: "0644"
-        content: |
-          services:
-            prometheus:
-              image: prom/prometheus:latest
-              volumes:
-                - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-              ports:
-                - "127.0.0.1:9090:9090"
-              command:
-                - --config.file=/etc/prometheus/prometheus.yml
-                - --storage.tsdb.path=/prometheus
-              restart: unless-stopped
+    # --- Safety: ensure no fixed container_name entries (avoid collisions) ---
 
-            alertmanager:
-              image: prom/alertmanager:latest
-              volumes:
-                - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-              ports:
-                - "127.0.0.1:9093:9093"
-              command:
-                - --config.file=/etc/alertmanager/alertmanager.yml
-                - --storage.path=/alertmanager
-              restart: unless-stopped
-              depends_on:
-                - prometheus
+    - name: Remove any container_name lines from docker-compose.yml
+      lineinfile:
+        path: "{{ deploy_path }}/docker-compose.yml"
+        regexp: '^\s*container_name:'
+        state: absent
+      notify: Restart stack
 
-            grafana:
-              image: grafana/grafana:latest
-              user: "0:0"
-              environment:
-                - GF_SECURITY_ADMIN_USER={{ gf_admin_user }}
-                - GF_SECURITY_ADMIN_PASSWORD={{ gf_admin_password }}
-                - GF_SERVER_HTTP_ADDR=0.0.0.0
-                - GF_SERVER_HTTP_PORT=3000
-              ports:
-                - "127.0.0.1:3000:3000"
-              volumes:
-                - ./grafana:/var/lib/grafana
-              restart: unless-stopped
-              depends_on:
-                - prometheus
-
-          networks:
-            default:
-              name: monitoring_net
-              driver: bridge
-
-    # --- One-time cleanup for legacy fixed container names & network ---
+    # --- One-time cleanup for legacy fixed names & network ---
 
     - name: Remove legacy containers with fixed names (safe if absent)
       shell: |
@@ -166,7 +120,7 @@
       changed_when: false
       failed_when: false
 
-    # --- Compose v2 module run (idempotent) ---
+    # --- Compose up (idempotent) ---
 
     - name: Pull images and start stack
       community.docker.docker_compose_v2:
@@ -199,3 +153,13 @@
         port: 3000
         delay: 1
         timeout: 90
+
+  handlers:
+    - name: Restart stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ deploy_path }}"
+        project_name: monitoring
+        state: present
+        pull: false
+        recreate: always
+        remove_orphans: true
