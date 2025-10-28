@@ -55,11 +55,23 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Sage Theme (Bud, conditional cache)
+    name: Build Sage Theme (max-cache)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # 1) Cache Composer *before* we install Acorn in the theme
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.composer/cache
+            ~/.cache/composer
+          key: composer-${{ runner.os }}-${{ hashFiles(format('{0}/composer.lock', env.THEME_DIR)) }}
+          restore-keys: |
+            composer-${{ runner.os }}-
+
+      # 2) Ensure Sage exists + install Acorn (no dev)
       - name: Ensure Sage exists (clone + composer deps)
         shell: bash
         run: |
@@ -67,24 +79,24 @@ jobs:
           if [ ! -d "${THEME_DIR}" ] || [ ! -f "${THEME_DIR}/package.json" ]; then
             mkdir -p "$(dirname "${THEME_DIR}")"
             git clone --depth=1 https://github.com/roots/sage "${THEME_DIR}"
-            sudo apt-get update -y
-            sudo apt-get install -y php-cli unzip
-            EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
-            php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
-            ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
-            [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
-            php composer-setup.php --quiet
-            rm composer-setup.php
-            php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
           fi
+          sudo apt-get update -y
+          sudo apt-get install -y php-cli unzip
+          EXPECTED_SIGNATURE="$(curl -fsSL https://composer.github.io/installer.sig)"
+          php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+          ACTUAL_SIGNATURE="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+          [ "$EXPECTED_SIGNATURE" = "$ACTUAL_SIGNATURE" ]
+          php composer-setup.php --quiet
+          rm composer-setup.php
+          php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
 
-      # ---- setup-node WITHOUT cache first (we'll add cache conditionally below)
+      # 3) Set up Node (no cache here — we do conditional caches below)
       - name: Use Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # ---- Conditional cache: use exactly one of these three
+      # 4) Conditional *package-manager* cache (fast)
       - name: Enable Yarn cache
         if: ${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) != '' }}
         uses: actions/setup-node@v4
@@ -109,7 +121,66 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ env.THEME_DIR }}/package-lock.json
 
-      - name: Install & build theme with Bud (auto PM)
+      # 5) Cache node_modules directly (biggest win)
+      - name: Cache node_modules (Yarn)
+        if: ${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEME_DIR }}/node_modules
+          key: nm-yarn-${{ runner.os }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}
+          restore-keys: |
+            nm-yarn-${{ runner.os }}-
+
+      - name: Cache node_modules (pnpm)
+        if: ${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEME_DIR }}/node_modules
+          key: nm-pnpm-${{ runner.os }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) }}
+          restore-keys: |
+            nm-pnpm-${{ runner.os }}-
+
+      - name: Cache node_modules (npm)
+        if: ${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEME_DIR }}/node_modules
+          key: nm-npm-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
+          restore-keys: |
+            nm-npm-${{ runner.os }}-
+
+      # 6) Extra caches per PM
+      - name: Cache Yarn Berry artifacts
+        if: ${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) != '' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.THEME_DIR }}/.yarn/cache
+            ${{ env.THEME_DIR }}/.yarn/unplugged
+          key: yarn-berry-${{ runner.os }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}
+          restore-keys: |
+            yarn-berry-${{ runner.os }}-
+
+      - name: Cache pnpm store
+        if: ${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) != '' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      # 7) Cache Bud/webpack cache (helps rebuilds a lot)
+      - name: Cache Bud/webpack cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEME_DIR }}/node_modules/.cache
+          key: budcache-${{ runner.os }}-${{ hashFiles(format('{0}/package.json', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/yarn.lock', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.THEME_DIR)) }}-${{ hashFiles(format('{0}/package-lock.json', env.THEME_DIR)) }}
+          restore-keys: |
+            budcache-${{ runner.os }}-
+
+      # 8) Install & build (auto-detect PM via lockfile)
+      - name: Install & build theme (Bud)
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
@@ -119,7 +190,6 @@ jobs:
             corepack enable
             corepack prepare yarn@stable --activate
             yarn --version
-            # Yarn 3+: try immutable, fallback to Yarn 1 flag
             (yarn install --immutable --immutable-cache) || yarn install --frozen-lockfile
             yarn build
 
@@ -135,8 +205,7 @@ jobs:
             npm run build
 
           else
-            echo "NOTE: No lockfile found (yarn.lock / pnpm-lock.yaml / package-lock.json)."
-            echo "Proceeding with npm install (non-deterministic)."
+            echo "No lockfile found — using npm (non-deterministic)."
             npm install --no-audit --no-fund
             npm run build
           fi
@@ -161,7 +230,6 @@ jobs:
           name: theme-build
           path: ${{ env.THEME_DIR }}
           retention-days: 3
-
 
   plugins_build:
     name: Assemble Plugins (GitHub sources)
