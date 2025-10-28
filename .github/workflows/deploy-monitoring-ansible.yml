@@ -37,21 +37,16 @@ jobs:
 
       - name: Run Ansible (inside Docker)
         env:
-          # Pass secrets for rendering monitoring/.env on the VM
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL:     ${{ secrets.SLACK_CHANNEL }}
-          GF_ADMIN_USER:     ${{ secrets.GF_ADMIN_USER }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          GF_ADMIN_USER: ${{ secrets.GF_ADMIN_USER }}
           GF_ADMIN_PASSWORD: ${{ secrets.GF_ADMIN_PASSWORD }}
-
-          # Ansible Vault password (if you use vaulted group_vars)
-          VAULT_PASS:        ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
-
-          # Optional: if your vault header uses a named vault id (e.g. ;dev / ;default)
-          # Leave blank if your header has no id.
-          VAULT_ID:          ${{ secrets.ANSIBLE_VAULT_ID }}
+          VAULT_PASS: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          VAULT_ID: ${{ secrets.ANSIBLE_VAULT_ID }} # leave empty if your vault header has no id
         run: |
-          # Build the inner script that the container will execute
-          cat > run.sh <<'BASH'
+          # ⬇️ write the script INSIDE the ansible/ dir so the container can see it at /workspace/ansible/run.sh
+          mkdir -p ansible
+          cat > ansible/run.sh <<'BASH'
           set -euo pipefail
 
           apk add --no-cache openssh-client git >/dev/null
@@ -76,15 +71,15 @@ jobs:
           # Optional collection (safe if already present)
           ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
 
-          # Run the playbook (your inventory.ini points to the host; extra-vars are kept for convenience)
+          # Run the playbook
           ansible-playbook -i inventory.ini monitoring.yml \
             ${VAULT_FLAG} \
             --extra-vars "target_host=${GCE_HOST} target_user=${GCE_USER} deploy_path=${DEPLOY_PATH}"
           BASH
 
-          chmod +x run.sh
+          chmod +x ansible/run.sh
 
-          # Execute Ansible inside container
+          # 🚀 Execute Ansible inside container (workdir points to /workspace/ansible)
           docker run --rm \
             -v "$PWD:/workspace" \
             -v "$HOME/.ssh/id_rsa:/root/.ssh/id_rsa:ro" \
@@ -99,6 +94,7 @@ jobs:
             -e VAULT_PASS \
             -e VAULT_ID \
             alpine/ansible sh -lc "./run.sh"
+
 
       - name: Post-deploy health checks (via SSH)
         if: inputs.run-health-checks == true
