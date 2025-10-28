@@ -2,6 +2,8 @@
 - name: Deploy/Update Monitoring Stack (no-vault)
   hosts: all
   become: true
+  collections:
+    - community.docker
   vars:
     deploy_path: "{{ lookup('env','DEPLOY_PATH') | default('/var/www/bedrock/shared/monitoring', true) }}"
     gf_admin_user: "{{ lookup('env','GF_ADMIN_USER') | default('admin', true) }}"
@@ -138,7 +140,7 @@
               driver: bridge
 
     - name: Pull images and start stack
-      community.general.docker_compose_v2:
+      docker_compose_v2:
         project_src: "{{ deploy_path }}"
         state: present
         pull: always
