@@ -55,7 +55,7 @@ jobs:
           retention-days: 3
 
   theme_build:
-    name: Build Sage Theme (npm, cached)
+    name: Build Sage Theme (Bud, auto PM + cache)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,28 +78,51 @@ jobs:
             php composer.phar --working-dir="${THEME_DIR}" install --no-interaction --no-dev
           fi
 
-      - name: Use Node
+      - name: Use Node (+ Yarn cache)
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: ${{ env.THEME_DIR }}/yarn.lock
 
-      - name: Install & build theme with Bud
+      - name: Install & build theme with Bud (auto PM)
         shell: bash
         working-directory: ${{ env.THEME_DIR }}
         run: |
           set -euxo pipefail
-          node -v
-          npm ci
-          # Be explicit: run bud build (npm run build should do this, but we force it)
-          npx bud --version || true
-          npx bud build
+
+          # Prefer Yarn (Sage default), then pnpm, then npm
+          if [ -f yarn.lock ]; then
+            corepack enable
+            corepack prepare yarn@stable --activate
+            yarn --version
+            # Cover Yarn 3+ (immutable) and Yarn 1.x (frozen-lockfile)
+            (yarn install --immutable --immutable-cache) || yarn install --frozen-lockfile
+            yarn build
+
+          elif [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            corepack prepare pnpm@latest --activate
+            pnpm --version
+            pnpm install --frozen-lockfile
+            pnpm run build
+
+          elif [ -f package-lock.json ]; then
+            npm ci
+            npm run build
+
+          else
+            # Last resort (shouldn’t happen with Sage)
+            npm install --no-audit --no-fund
+            npm run build
+          fi
 
           echo "== List public =="
           ls -la public || true
           echo "== Show entrypoints =="
           test -f public/entrypoints.json && head -n 50 public/entrypoints.json || true
 
-          # HARD REQUIREMENTS
+          # HARD REQUIREMENTS (fail early if Bud didn’t emit assets)
           test -f public/entrypoints.json || (echo "ERROR: missing public/entrypoints.json" && exit 1)
           css_count=$(ls public/*.css 2>/dev/null | wc -l || true)
           js_count=$(ls public/*.js  2>/dev/null | wc -l || true)
