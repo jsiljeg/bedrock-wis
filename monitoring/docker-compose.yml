@@ -1,20 +1,18 @@
-version: "3.8"
-
 services:
   node-exporter:
     image: quay.io/prometheus/node-exporter:latest
     container_name: node-exporter
-    pid: host
-    network_mode: host
     restart: unless-stopped
     command:
-      - --collector.procfs=/host/proc
-      - --collector.sysfs=/host/sys
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
       - --path.rootfs=/host
+    ports:
+      - 127.0.0.1:9100:9100
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
-      - /:/host:ro,rslave
+      - /:/host:ro
 
   blackbox-exporter:
     image: prom/blackbox-exporter:latest
@@ -43,6 +41,8 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --web.enable-remote-write-receiver
+      - --web.external-url=http://34.88.159.90/prometheus
+      - --web.route-prefix=/prometheus
 
   alertmanager:
     image: prom/alertmanager:latest
@@ -50,18 +50,30 @@ services:
     restart: unless-stopped
     ports:
       - 127.0.0.1:9093:9093
+    env_file:
+      - ./.env
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CHANNEL=${SLACK_CHANNEL}
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.external-url=http://34.88.159.90/alertmanager
+      - --web.route-prefix=/alertmanager
+      - --config.expand-env=true
 
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
     restart: unless-stopped
     env_file:
-      - ./.env   # rendered from .env.template by GH Action
+      - ./.env
     environment:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "http://34.88.159.90/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     ports:
       - 127.0.0.1:3000:3000
     volumes:

@@ -4,131 +4,51 @@ on:
   workflow_dispatch:
     inputs:
       send_test_alert:
-        description: "Send a synthetic alert to Slack via Alertmanager?"
+        description: "Send a synthetic alert?"
         type: boolean
         default: true
   push:
     branches: [ master ]
     paths:
-      - 'monitoring/**'
       - '.github/workflows/monitoring-smoke.yml'
 
-permissions:
-  contents: read
-
 jobs:
-  monitoring_smoke:
-    name: Deploy monitoring + optional Slack test
+  smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare SSH key
+      - name: Prepare SSH
         run: |
           mkdir -p ~/.ssh
           printf '%s' "${{ secrets.GCE_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.GCE_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Rsync monitoring directory
+      - name: Port-forward + probe Prometheus & Grafana
         run: |
-          rsync -rlgoDzv --delete \
-            -e "ssh -i ~/.ssh/id_rsa" \
-            monitoring/ \
-            "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}:${{ secrets.GCE_DEPLOY_PATH }}/monitoring/"
+          ssh -fN -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 -L 3000:127.0.0.1:3000 \
+            -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}
+          # give tunnel a moment
+          sleep 2
+          curl -fsSL http://127.0.0.1:9090/-/ready
+          curl -fsSL http://127.0.0.1:9090/api/v1/status/config
+          curl -fsSL http://127.0.0.1:3000/login | head -n1
+          curl -fsSL http://127.0.0.1:9093/#/status | head -n1
 
-      # Install Docker CE + Compose plugin if missing (Debian 12/Bookworm)
-      - name: Ensure Docker is installed on VM
-        run: |
-          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" bash -se <<'EOS'
-          set -euxo pipefail
-          if ! command -v docker >/dev/null 2>&1; then
-            # Prereqs
-            sudo apt-get update -y
-            sudo apt-get install -y ca-certificates curl gnupg
-            sudo install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-            sudo chmod a+r /etc/apt/keyrings/docker.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
-            $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            sudo apt-get update -y
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            sudo systemctl enable --now docker
-          fi
-          docker --version || true
-          docker compose version || true
-          EOS
-
-      - name: Render config & (re)start monitoring
-        run: |
-          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
-            "GCE_DEPLOY_PATH='${{ secrets.GCE_DEPLOY_PATH }}' \
-             GF_ADMIN_USER='${{ secrets.GF_ADMIN_USER }}' \
-             GF_ADMIN_PASSWORD='${{ secrets.GF_ADMIN_PASSWORD }}' \
-             HEALTHCHECK_URL='${{ secrets.HEALTHCHECK_URL }}' \
-             ALERT_SLACK_WEBHOOK='${{ secrets.ALERT_SLACK_WEBHOOK }}' \
-             ALERT_SLACK_CHANNEL='${{ secrets.ALERT_SLACK_CHANNEL }}' \
-             ALERT_ENV='${{ secrets.ALERT_ENV }}' \
-             bash -se" <<'EOS'
-          set -euxo pipefail
-
-          # Ensure target exists, then move into it
-          sudo mkdir -p "${GCE_DEPLOY_PATH}/monitoring"
-          cd "${GCE_DEPLOY_PATH}/monitoring"
-
-          # 1) Render Grafana env
-          cp .env.template .env
-          sed -i \
-            -e "s#__GF_ADMIN_USER__#${GF_ADMIN_USER}#g" \
-            -e "s#__GF_ADMIN_PASSWORD__#${GF_ADMIN_PASSWORD}#g" \
-            .env
-
-          # 2) Inject Bedrock health URL in Prometheus
-          sed -i \
-            -e "s#__HEALTHCHECK_URL__#${HEALTHCHECK_URL}#g" \
-            prometheus/prometheus.yml
-
-          # 3) Inject Slack + env in Alertmanager
-          sed -i \
-            -e "s#__SLACK_WEBHOOK__#${ALERT_SLACK_WEBHOOK}#g" \
-            -e "s#__SLACK_CHANNEL__#${ALERT_SLACK_CHANNEL}#g" \
-            -e "s#__ALERT_ENV__#${ALERT_ENV}#g" \
-            alertmanager/alertmanager.yml
-
-          # 4) Start/Restart stack (use sudo in case runner user isn't in 'docker' group)
-          sudo docker compose pull
-          sudo docker compose up -d
-          EOS
-
-      - name: Send synthetic alert to Alertmanager (Slack smoke)
+      - name: (Optional) Send synthetic alert to Alertmanager
         if: ${{ inputs.send_test_alert }}
         run: |
-          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" \
-            "ALERT_ENV='${{ secrets.ALERT_ENV }}' bash -se" <<'EOS'
+          ssh -i ~/.ssh/id_rsa "${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }}" 'bash -se' <<'EOS'
           set -euo pipefail
           now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           end=$(date -u -d "+5 minutes" +"%Y-%m-%dT%H:%M:%SZ")
-          cat >/tmp/smoke-alert.json <<JSON
+          cat >/tmp/smoke.json <<JSON
           [
             {
-              "labels": {
-                "alertname": "SlackIntegrationTest",
-                "severity": "info",
-                "env": "${ALERT_ENV}"
-              },
-              "annotations": {
-                "summary": "Synthetic Slack test alert",
-                "description": "Triggered by Monitoring Smoke Test workflow"
-              },
-              "startsAt": "$now",
-              "endsAt": "$end",
-              "generatorURL": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "labels": { "alertname":"SlackIntegrationTest", "severity":"info", "env":"${{ secrets.ALERT_ENV }}" },
+              "annotations": { "summary":"Synthetic Slack test", "description":"GH workflow smoke" },
+              "startsAt":"'"$now"'", "endsAt":"'"$end"'", "generatorURL":"github/smoke"
             }
           ]
           JSON
-          curl -sS -X POST \
-            -H 'Content-Type: application/json' \
-            --data @/tmp/smoke-alert.json \
-            http://127.0.0.1:9093/api/v2/alerts
-          echo "Posted synthetic alert; check channel: ${{ secrets.ALERT_SLACK_CHANNEL }}"
+          curl -sS -X POST -H 'Content-Type: application/json' --data @/tmp/smoke.json http://127.0.0.1:9093/api/v2/alerts
           EOS

@@ -1,0 +1,46 @@
+- hosts: all
+  gather_facts: false
+
+  vars_files:
+    - group_vars/all/vault.yml
+
+  vars:
+    target_host: "{{ target_host | default('127.0.0.1') }}"
+    target_user: "{{ target_user | default('root') }}"
+    deploy_path: "{{ deploy_path | default('/opt/bedrock') }}"
+
+  roles:
+    - role: docker
+    - role: monitoring_stack
+
+  tasks:
+    - name: Post synthetic Slack smoke alert to local Alertmanager
+      tags: [ "smoke" ]
+      become: false
+      shell: |
+        set -euo pipefail
+        now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        end=$(date -u -d "+5 minutes" +"%Y-%m-%dT%H:%M:%SZ")
+        cat >/tmp/smoke-alert.json <<JSON
+        [
+          {
+            "labels": {
+              "alertname": "SlackIntegrationTest",
+              "severity": "info",
+              "env": "{{ alert_env | default('development') }}"
+            },
+            "annotations": {
+              "summary": "Synthetic Slack test alert",
+              "description": "Triggered by Terraform/Ansible smoke tag"
+            },
+            "startsAt": "$now",
+            "endsAt": "$end",
+            "generatorURL": "ansible"
+          }
+        ]
+        JSON
+        curl -sS -H 'Content-Type: application/json' \
+             --data @/tmp/smoke-alert.json \
+             http://127.0.0.1:9093/api/v2/alerts
+      args:
+        executable: /bin/bash

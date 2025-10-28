@@ -11,8 +11,8 @@ route:
 receivers:
   - name: default
     slack_configs:
-      - api_url: __SLACK_WEBHOOK__
-        channel: __SLACK_CHANNEL__
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "${SLACK_CHANNEL}"
         send_resolved: true
         title: "[__ALERT_ENV__] {{ .CommonLabels.alertname }}"
         text: |

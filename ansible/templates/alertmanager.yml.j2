@@ -1,0 +1,20 @@
+route:
+  receiver: "slack"
+  group_by: ["alertname","env"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: "slack"
+    slack_configs:
+      - send_resolved: true
+        api_url: "{{ slack_webhook }}"
+        channel: "{{ slack_channel }}"
+        username: "Alertmanager"
+        icon_emoji: ":rotating_light:"
+        title: "[{{ '{{' }} .Status | toUpper {{ '}}' }}] {{ '{{' }} .CommonLabels.alertname {{ '}}' }} ({{ '{{' }} .CommonLabels.env {{ '}}' }})"
+        text: >-
+          {{ '{{' }}- range .Alerts -{{ '}}' }}
+          • *{{ '{{' }} .Labels.alertname {{ '}}' }}* ({{ '{{' }} .Labels.severity {{ '}}' }}) – {{ '{{' }} .Annotations.summary {{ '}}' }}
+          {{ '{{' }}- end {{ '}}' }}
