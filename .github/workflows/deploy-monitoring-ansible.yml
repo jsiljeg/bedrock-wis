@@ -54,8 +54,7 @@ jobs:
           # If your play uses docker modules, uncomment this:
           # ansible-galaxy collection install community.docker >/dev/null 2>&1 || true
 
-          ansible-playbook -i inventory.ini monitoring.yml \
-            --extra-vars "target_host=${GCE_HOST} target_user=${GCE_USER} deploy_path=${DEPLOY_PATH}"
+          ansible-playbook -i ansible/inventory.ini monitoring.yml
 
       - name: Post-deploy health checks (via SSH)
         if: inputs.run-health-checks == true
