@@ -2,12 +2,12 @@ services:
   prometheus:
     image: prom/prometheus:latest
     volumes:
-      - ./prometheus/prometheus.yml.j2:/etc/prometheus/prometheus.yml.j2:ro
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
     ports:
       - "127.0.0.1:9090:9090"
     command:
-      - --config.file=/etc/prometheus/prometheus.yml.j2
+      - --config.file=/etc/prometheus/prometheus.yml
       - --web.enable-lifecycle
     depends_on:
       - node-exporter
@@ -17,22 +17,19 @@ services:
   alertmanager:
     image: prom/alertmanager:latest
     volumes:
-      - ./alertmanager/alertmanager.yml.j2:/etc/alertmanager/alertmanager.yml.j2:ro
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "127.0.0.1:9093:9093"
     command:
-      - --config.file=/etc/alertmanager/alertmanager.yml.j2
+      - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
     user: "0:0"
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER}
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD}
-      - GF_SERVER_HTTP_ADDR=0.0.0.0
-      - GF_SERVER_HTTP_PORT=3000
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

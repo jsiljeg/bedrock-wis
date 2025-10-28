@@ -160,6 +160,6 @@
         project_src: "{{ deploy_path }}"
         project_name: monitoring
         state: present
-        pull: false
+        pull: never
         recreate: always
         remove_orphans: true
