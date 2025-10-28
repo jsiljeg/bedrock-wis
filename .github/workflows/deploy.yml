@@ -38,12 +38,12 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
 
-      - name: Configure Roots repo (for roots/wordpress)
-        run: composer config repositories.roots composer https://repo.roots.io
+      #- name: Configure Roots repo (for roots/wordpress)
+      #  run: composer config repositories.roots composer https://repo.roots.io
 
       # Update lock to match composer.json (prod only)
-      - name: Update lock (prod deps)
-        run: composer update --no-interaction --no-progress --prefer-dist --no-dev
+      #- name: Update lock (prod deps)
+      #  run: composer update --no-interaction --no-progress --prefer-dist --no-dev
 
       - name: Install Composer deps (no dev)
         run: composer install --no-interaction --no-progress --prefer-dist --no-dev
