@@ -235,31 +235,35 @@ jobs:
           set -e
           [ -f web/wp/wp-settings.php ] || { echo "ERROR: web/wp missing from release"; exit 1; }
 
-      - name: Require Acorn (prefer v5, fallback v4.4) without dev deps
+      - name: Install Acorn plugin into Bedrock (no-dev, conflict-safe)
         run: |
           set -euxo pipefail
+          export COMPOSER_NO_INTERACTION=1
+          export COMPOSER_NO_AUDIT=1
 
-          # 1) Allow the Acorn installer if it exists
-          composer config --no-interaction allow-plugins.roots/acorn-installer true || true
+          # 0) Allow acorn installer plugin if present
+          composer config allow-plugins.roots/acorn-installer true || true
 
-          # Helper that tries a version then verifies plugin files exist
+          # 1) Make sure lock does not pin dev deps that conflict (wp-cli bundle)
+          #    This edits require-dev and updates the lock WITHOUT dev.
+          if composer show --locked wp-cli/wp-cli-bundle >/dev/null 2>&1; then
+            composer remove --dev wp-cli/wp-cli-bundle --no-update || true
+            composer update --no-dev --no-progress --prefer-dist
+          fi
+
+          # Helper that writes the constraint (no-update), then updates only what's needed (no-dev)
           try_acorn() {
             ver="$1"
-            # a) write the constraint without updating yet
-            composer require roots/acorn:"$ver" -W --no-interaction --no-progress --prefer-dist --no-update
-            # b) update only what's needed, and keep NO-DEV
-            composer update roots/acorn --with-all-dependencies --no-interaction --no-progress --prefer-dist --no-dev
-            # c) install (optimize) to be extra sure vendor matches lock (no dev)
-            composer install --no-interaction --no-progress --prefer-dist --no-dev -o
-            # d) verify plugin landed in Bedrock plugins dir
+            composer require roots/acorn:"$ver" -W --no-update --no-progress --prefer-dist
+            composer update roots/acorn --with-all-dependencies --no-dev --no-progress --prefer-dist
+            composer install --no-dev --no-progress --prefer-dist -o
             test -f web/app/plugins/acorn/acorn.php
           }
 
-          # Try Acorn 5 first (works with Sage 10 too); fallback to 4.4 if constraints resist
+          # 2) Prefer Acorn v5 (works with Sage 10 & 11), fallback to v4.4 if constraints resist
           if ! try_acorn '^5.0'; then
             echo 'Acorn ^5 failed; falling back to ^4.4 (Symfony 6 compatible)'
-            # remove the constraint we just added (if any) then try ^4.4
-            composer remove roots/acorn --no-interaction || true
+            composer remove roots/acorn --no-update || true
             try_acorn '^4.4'
           fi
 
