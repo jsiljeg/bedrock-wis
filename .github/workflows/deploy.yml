@@ -64,15 +64,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Clone Sage 10 — pin exact tag for reproducibility
-      - name: Clone Sage 10.8.2 (Bud)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          rm -rf "${THEME_DIR}"
-          mkdir -p "$(dirname "${THEME_DIR}")"
-          git clone --depth=1 --branch v10.8.2 https://github.com/roots/sage "${THEME_DIR}"
-
       # Composer for theme (Acorn)
       - name: Install PHP + Composer
         shell: bash
@@ -332,6 +323,28 @@ jobs:
           admin-user: ${{ secrets.WP_ADMIN_USER }}
           admin-pass: ${{ secrets.WP_ADMIN_PASS }}
           admin-email: ${{ secrets.WP_ADMIN_EMAIL }}
+
+      - name: Fix Acorn cache permissions (shared, persistent)
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.GCE_USER }}@${{ secrets.GCE_HOST }} bash -se << 'EOS'
+          set -euxo pipefail
+          cd "${{ secrets.GCE_DEPLOY_PATH }}"
+
+          # Shared Acorn cache (persistent)
+          sudo mkdir -p shared/cache/acorn/framework/{cache,views}
+          sudo chown -R www-data:www-data shared/cache
+          sudo find shared/cache -type d -exec chmod 775 {} \;
+          sudo find shared/cache -type f -exec chmod 664 {} \;
+
+          # Link current release to shared cache
+          REL=$(readlink -f current)
+          if [ -e "$REL/web/app/cache" ] && [ ! -L "$REL/web/app/cache" ]; then
+            sudo rm -rf "$REL/web/app/cache"
+          fi
+          sudo ln -sfn "${PWD}/shared/cache" "$REL/web/app/cache"
+          sudo chown -h www-data:www-data "$REL/web/app/cache"
+          EOS
 
       - name: Activate Sage theme + flush rewrites
         shell: bash
